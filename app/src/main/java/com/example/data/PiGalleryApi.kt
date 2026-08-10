@@ -1,4 +1,6 @@
+@file:Suppress("UNCHECKED_CAST")
 package com.example.data
+
 import android.content.Context
 import okhttp3.Cache
 import java.io.File

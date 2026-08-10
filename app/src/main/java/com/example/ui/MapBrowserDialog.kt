@@ -1339,3 +1339,4 @@ enum class MapProvider(val label: String, val url: String, val attribution: Stri
             SATELLITE -> "https://api.maptiler.com/maps/hybrid/3/4/2.jpg?key=lZTC1a9vLiM26GQ9Vxmu"
         }
 }
+

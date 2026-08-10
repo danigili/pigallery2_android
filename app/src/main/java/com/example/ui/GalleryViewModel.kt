@@ -1284,6 +1284,7 @@ fun loadAlbums() {
         return String.format("%.2f %s", size / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups])
     }
 
+    @OptIn(coil.annotation.ExperimentalCoilApi::class)
     fun clearCaches() {
         val context = getApplication<Application>()
         val imageCache = java.io.File(context.cacheDir, "image_cache")

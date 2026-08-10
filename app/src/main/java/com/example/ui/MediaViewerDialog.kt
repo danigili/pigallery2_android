@@ -33,6 +33,9 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.RotateRight
+import androidx.compose.material.icons.automirrored.outlined.InsertDriveFile
+import androidx.compose.material.icons.automirrored.outlined.Label
 
 
 
@@ -687,7 +690,7 @@ fun MediaViewerDialog(
                                     },
                                     leadingIcon = {
                                         Icon(
-                                            imageVector = Icons.Default.RotateRight,
+                                            imageVector = Icons.AutoMirrored.Filled.RotateRight,
                                             contentDescription = null
                                         )
                                     }
@@ -873,7 +876,7 @@ fun MetadataContent(media: ApiMedia, onClose: () -> Unit) {
 
         HorizontalDivider(color = Color.White.copy(alpha = 0.15f))
 
-        MetadataRow(icon = Icons.Outlined.InsertDriveFile, label = "Filename", value = media.name)
+        MetadataRow(icon = Icons.AutoMirrored.Outlined.InsertDriveFile, label = "Filename", value = media.name)
         media.parentPath?.let {
             val cleanedPath = it.replace(Regex("/{2,}"), "/")
             MetadataRow(icon = Icons.Outlined.Folder, label = "Folder", value = cleanedPath)
@@ -918,7 +921,7 @@ fun MetadataContent(media: ApiMedia, onClose: () -> Unit) {
         
         val keywords = media.metadata?.keywords?.distinct()
         if (!keywords.isNullOrEmpty()) {
-            MetadataBlock(icon = Icons.Outlined.Label, label = "Keywords", value = keywords.joinToString(", "))
+            MetadataBlock(icon = Icons.AutoMirrored.Outlined.Label, label = "Keywords", value = keywords.joinToString(", "))
         }
         
         val faces = media.metadata?.faces

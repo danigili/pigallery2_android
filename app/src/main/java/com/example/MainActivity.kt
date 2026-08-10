@@ -132,6 +132,7 @@ class MainActivity : ComponentActivity() {
 
             val view = LocalView.current
             if (!view.isInEditMode) {
+                @Suppress("DEPRECATION")
                 SideEffect {
                     val window = view.context.findActivity()?.window ?: return@SideEffect
                     window.statusBarColor = android.graphics.Color.TRANSPARENT
