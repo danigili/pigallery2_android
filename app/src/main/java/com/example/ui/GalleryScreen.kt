@@ -1953,18 +1953,16 @@ fun GalleryContentGrid(
 
 
     val groupedMedia = remember(mediaList) {
-        mediaList.groupBy { media ->
-            val timestamp = media.metadata?.creationDate
-            if (timestamp == null) "Unbekannt"
-            else {
-                val ms = if (timestamp < 10000000000L) timestamp * 1000L else timestamp
-                try {
-                    java.text.SimpleDateFormat("MMMM yyyy", java.util.Locale.getDefault()).format(java.util.Date(ms))
-                } catch (e: Exception) {
-                    "Unbekannt"
-                }
+        val grouped = LinkedHashMap<String, MutableList<ApiMedia>>()
+        for (media in mediaList) {
+            val key = DateUtils.formatMediaDate(media.metadata?.creationDate, media.metadata?.creationDateOffset, "MMMM yyyy")
+            if (grouped.containsKey(key)) {
+                grouped[key]!!.add(media)
+            } else {
+                grouped[key] = mutableListOf(media)
             }
         }
+        grouped
     }
 
     val isTv = LocalContext.current.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
@@ -2649,7 +2647,7 @@ fun AboutDialog(onDismiss: () -> Unit) {
                     val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
                     packageInfo.versionName
                 } catch (e: Exception) {
-                    "2.1"
+                    "2.2"
                 }
                 Text("Version $version", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(16.dp))

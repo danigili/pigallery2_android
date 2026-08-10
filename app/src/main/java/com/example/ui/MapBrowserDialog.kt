@@ -350,10 +350,8 @@ private fun MapViewContainer(
         for (media in geotaggedMedia) {
             val gps = media.metadata?.gps ?: continue
             val id = media.id?.toString() ?: ""
-            val creationDate = media.metadata?.creationDate
-            val dateTitle = if (creationDate != null) {
-                val ms = if (creationDate < 10000000000L) creationDate * 1000L else creationDate
-                java.text.SimpleDateFormat("dd.MM.yyyy HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(ms))
+            val dateTitle = if (media.metadata?.creationDate != null) {
+                DateUtils.formatMediaDate(media.metadata?.creationDate, media.metadata?.creationDateOffset)
             } else {
                 ""
             }
@@ -703,7 +701,7 @@ private fun MapViewContainer(
     }
 
     val sortedMedia = remember(geotaggedMedia) { 
-        geotaggedMedia.sortedBy { it.metadata?.creationDate ?: 0L } 
+        geotaggedMedia.sortedBy { DateUtils.getLocalTimeMs(it.metadata?.creationDate, it.metadata?.creationDateOffset) } 
     }
     var activeMediaId by remember(sortedMedia, initialMediaId) { mutableStateOf(initialMediaId ?: sortedMedia.firstOrNull()?.id?.toString()) }
     val currentActiveMediaId by rememberUpdatedState(activeMediaId)
@@ -1185,10 +1183,8 @@ private fun MapViewContainer(
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
                     
-                    val creationDate = activeMedia.metadata?.creationDate
-                    if (creationDate != null) {
-                        val ms = if (creationDate < 10000000000L) creationDate * 1000L else creationDate
-                        val dateStr = java.text.SimpleDateFormat("dd.MM.yyyy HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(ms))
+                    if (activeMedia.metadata?.creationDate != null) {
+                        val dateStr = DateUtils.formatMediaDate(activeMedia.metadata?.creationDate, activeMedia.metadata?.creationDateOffset)
                         Text(
                             text = dateStr,
                             style = MaterialTheme.typography.bodySmall,
@@ -1343,4 +1339,3 @@ enum class MapProvider(val label: String, val url: String, val attribution: Stri
             SATELLITE -> "https://api.maptiler.com/maps/hybrid/3/4/2.jpg?key=lZTC1a9vLiM26GQ9Vxmu"
         }
 }
-

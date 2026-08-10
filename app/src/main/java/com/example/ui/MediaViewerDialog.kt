@@ -16,6 +16,8 @@ import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -76,6 +78,8 @@ import com.example.data.ApiMedia
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.first
 import java.io.File
 import java.io.IOException
@@ -213,6 +217,24 @@ fun MediaViewerDialog(
     var showBars by remember { mutableStateOf(true) }
     var showFaceRegions by remember { mutableStateOf(false) }
     var isVideoPlaying by remember(currentMedia) { mutableStateOf(true) }
+    var videoDuration by remember(currentMedia) { mutableStateOf(0) }
+    var videoCurrentPosition by remember(currentMedia) { mutableStateOf(0) }
+    var isDraggingVideoSlider by remember(currentMedia) { mutableStateOf(false) }
+    var videoSliderValue by remember(currentMedia) { mutableStateOf(0f) }
+    var activeVideoView by remember(currentMedia) { mutableStateOf<VideoView?>(null) }
+
+    LaunchedEffect(isVideoPlaying, activeVideoView) {
+        val vv = activeVideoView
+        if (isVideoPlaying && vv != null) {
+            while (isVideoPlaying) {
+                if (!isDraggingVideoSlider) {
+                    videoCurrentPosition = vv.currentPosition
+                    videoDuration = vv.duration
+                }
+                kotlinx.coroutines.delay(250L)
+            }
+        }
+    }
     var showMoreMenu by remember { mutableStateOf(false) }
     
     val slideshowDuration = viewModel.slideshowDuration.collectAsState().value
@@ -253,19 +275,66 @@ fun MediaViewerDialog(
     var videoCompletionTrigger by remember { mutableStateOf(0L) }
 
     LaunchedEffect(isSlideshowPlaying) {
-        while (isSlideshowPlaying) {
-            val currentMedia = mediaList.getOrNull(pagerState.currentPage)
+        if (!isSlideshowPlaying) return@LaunchedEffect
+        if (mediaList.size <= 1) return@LaunchedEffect
+        
+        while (isActive) {
+            val pageAtStart = pagerState.currentPage
+            val currentMedia = mediaList.getOrNull(pageAtStart)
+            
             if (currentMedia != null && currentMedia.isVideo) {
-                androidx.compose.runtime.snapshotFlow { videoCompletionTrigger }.filter { it > 0L }.first()
                 videoCompletionTrigger = 0L
+                try {
+                    kotlinx.coroutines.coroutineScope {
+                        launch {
+                            androidx.compose.runtime.snapshotFlow { videoCompletionTrigger }
+                                .filter { it > 0L }
+                                .first()
+                            this@coroutineScope.cancel()
+                        }
+                        launch {
+                            androidx.compose.runtime.snapshotFlow { pagerState.currentPage }
+                                .filter { it != pageAtStart }
+                                .first()
+                            this@coroutineScope.cancel()
+                        }
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    if (!isActive) throw e
+                    // Scope was cancelled when video completed or page changed
+                }
             } else {
-                kotlinx.coroutines.delay(slideshowDuration * 1000L)
+                try {
+                    kotlinx.coroutines.coroutineScope {
+                        launch {
+                            kotlinx.coroutines.delay(slideshowDuration * 1000L)
+                            this@coroutineScope.cancel()
+                        }
+                        launch {
+                            androidx.compose.runtime.snapshotFlow { pagerState.currentPage }
+                                .filter { it != pageAtStart }
+                                .first()
+                            this@coroutineScope.cancel()
+                        }
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    if (!isActive) throw e
+                    // Scope was cancelled when timer expired or page changed
+                }
             }
-            if (pagerState.currentPage < mediaList.size - 1) {
-                pagerState.animateScrollToPage(pagerState.currentPage + 1)
-            } else {
-                // Loop back to the first image
-                pagerState.animateScrollToPage(0)
+            
+            if (!isActive) break
+            
+            // If we are still on the same page, we animate to the next page!
+            if (pagerState.currentPage == pageAtStart) {
+                val nextPage = (pageAtStart + 1) % mediaList.size
+                try {
+                    pagerState.animateScrollToPage(nextPage)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // Ignore animation cancellation
+                }
             }
         }
     }
@@ -418,6 +487,13 @@ fun MediaViewerDialog(
                             onVideoCompletion = { videoCompletionTrigger = System.currentTimeMillis() },
                             onToggleBars = {
                                 showBars = !showBars
+                            },
+                            showBars = showBars,
+                            onVideoPrepared = { duration, videoView ->
+                                if (page == pagerState.currentPage) {
+                                    videoDuration = duration
+                                    activeVideoView = videoView
+                                }
                             }
                         )
                     }
@@ -630,21 +706,6 @@ fun MediaViewerDialog(
                                         )
                                     }
                                 )
-                            } else {
-                                androidx.compose.material3.DropdownMenuItem(
-                                    modifier = Modifier.tvFocus(),
-                                    text = { androidx.compose.material3.Text(if (isVideoPlaying) "Pause Video" else "Play Video") },
-                                    onClick = {
-                                        isVideoPlaying = !isVideoPlaying
-                                        showMoreMenu = false
-                                    },
-                                    leadingIcon = {
-                                        Icon(
-                                            imageVector = if (isVideoPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                            contentDescription = null
-                                        )
-                                    }
-                                )
                             }
                         }
                     }
@@ -658,29 +719,92 @@ fun MediaViewerDialog(
                 exit = slideOutVertically { it },
                 modifier = Modifier.align(Alignment.BottomCenter)
             ) {
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(Color.Black.copy(alpha = 0.6f))
+                        .background(Color.Black.copy(alpha = 0.75f))
                         .windowInsetsPadding(WindowInsets.safeDrawing)
-                        .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 32.dp)
-                        .onFocusChanged { bottomBarFocused = it.hasFocus },
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 16.dp)
+                        .onFocusChanged { bottomBarFocused = it.hasFocus }
                 ) {
-                    Text(
-                        text = currentMedia.name,
-                        color = Color.White,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f).padding(end = 16.dp)
-                    )
-                    Text(
-                        text = "${pagerState.currentPage + 1} / ${mediaList.size}",
-                        color = Color.White.copy(alpha = 0.8f),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                    if (currentMedia.isVideo) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            IconButton(
+                                onClick = { isVideoPlaying = !isVideoPlaying }
+                            ) {
+                                Icon(
+                                    imageVector = if (isVideoPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                    contentDescription = if (isVideoPlaying) "Pause" else "Play",
+                                    tint = Color.White
+                                )
+                            }
+                            
+                            val displayPos = if (isDraggingVideoSlider) videoSliderValue.toInt() else videoCurrentPosition
+                            Text(
+                                text = formatTime(displayPos),
+                                color = Color.White,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            
+                            Spacer(modifier = Modifier.width(8.dp))
+                            
+                            if (!isDraggingVideoSlider) {
+                                videoSliderValue = videoCurrentPosition.toFloat()
+                            }
+                            Slider(
+                                value = videoSliderValue,
+                                onValueChange = { newValue ->
+                                    isDraggingVideoSlider = true
+                                    videoSliderValue = newValue
+                                },
+                                onValueChangeFinished = {
+                                    isDraggingVideoSlider = false
+                                    activeVideoView?.seekTo(videoSliderValue.toInt())
+                                    videoCurrentPosition = videoSliderValue.toInt()
+                                },
+                                valueRange = 0f..videoDuration.toFloat().coerceAtLeast(1f),
+                                colors = SliderDefaults.colors(
+                                    thumbColor = MaterialTheme.colorScheme.primary,
+                                    activeTrackColor = MaterialTheme.colorScheme.primary,
+                                    inactiveTrackColor = Color.White.copy(alpha = 0.24f)
+                                ),
+                                modifier = Modifier.weight(1f)
+                            )
+                            
+                            Spacer(modifier = Modifier.width(8.dp))
+                            
+                            Text(
+                                text = formatTime(videoDuration),
+                                color = Color.White,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                        
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = currentMedia.name,
+                            color = Color.White,
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f).padding(end = 16.dp)
+                        )
+                        Text(
+                            text = "${pagerState.currentPage + 1} / ${mediaList.size}",
+                            color = Color.White.copy(alpha = 0.8f),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
                 }
             }
 
@@ -760,7 +884,7 @@ fun MetadataContent(media: ApiMedia, onClose: () -> Unit) {
             MetadataRow(icon = Icons.Outlined.AspectRatio, label = "Dimensions", value = "${size.width} × ${size.height} px")
         }
 
-        val dateStr = formatCreationDate(media.metadata?.creationDate)
+        val dateStr = DateUtils.formatMediaDate(media.metadata?.creationDate, media.metadata?.creationDateOffset)
         MetadataRow(icon = Icons.Outlined.DateRange, label = "Date Taken", value = dateStr)
 
         MetadataRow(icon = if (media.isVideo) Icons.Outlined.Videocam else Icons.Outlined.Image, label = "Type", value = if (media.isVideo) "Video (MP4)" else "Image")
@@ -818,7 +942,9 @@ fun MediaViewerItem(
     isVideoPlaying: Boolean,
     onVideoPlayingChange: (Boolean) -> Unit,
     onVideoCompletion: () -> Unit,
-    onToggleBars: () -> Unit
+    onToggleBars: () -> Unit,
+    showBars: Boolean,
+    onVideoPrepared: (duration: Int, videoView: VideoView) -> Unit
 ) {
     val isTv = remember(context) {
         context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
@@ -853,7 +979,7 @@ fun MediaViewerItem(
             var isPreparing by remember { mutableStateOf(true) }
             var isBuffering by remember { mutableStateOf(false) }
             var hasError by remember { mutableStateOf(false) }
-            
+
             val initialAspectRatio = remember(media) {
                 val w = media.metadata?.size?.width?.toFloat()
                 val h = media.metadata?.size?.height?.toFloat()
@@ -899,6 +1025,7 @@ fun MediaViewerItem(
                                 if (w > 0 && h > 0) {
                                     videoAspectRatio = w.toFloat() / h.toFloat()
                                 }
+                                onVideoPrepared(mp.duration, this)
                                 start()
                             }
                             setOnInfoListener { _, what, _ ->
@@ -924,7 +1051,6 @@ fun MediaViewerItem(
                                 false
                             }
                         }
-
                         frameLayout.addView(videoView)
                         frameLayout
                     },
@@ -941,12 +1067,11 @@ fun MediaViewerItem(
                     modifier = Modifier.fillMaxSize()
                 )
 
-                // Transparent tap overlay covering upper 80% of the screen
+                // Transparent tap overlay covering full screen
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .fillMaxHeight(0.8f)
-                        .align(Alignment.TopCenter)
+                        .fillMaxSize()
+                        .align(Alignment.Center)
                         .pointerInput(Unit) {
                             detectTapGestures(onTap = { onToggleBars() })
                         }
@@ -1220,17 +1345,6 @@ fun MetadataBlock(icon: androidx.compose.ui.graphics.vector.ImageVector, label: 
     }
 }
 
-fun formatCreationDate(timestamp: Long?): String {
-    if (timestamp == null) return "Unknown"
-    val ms = if (timestamp < 10000000000L) timestamp * 1000L else timestamp
-    return try {
-        val sdf = java.text.SimpleDateFormat("dd.MM.yyyy HH:mm:ss", java.util.Locale.getDefault())
-        sdf.format(java.util.Date(ms))
-    } catch (e: Exception) {
-        "Unknown"
-    }
-}
-
 private fun downloadFile(context: Context, url: String, fileName: String, cookies: String) {
     try {
         val request = DownloadManager.Request(Uri.parse(url))
@@ -1249,5 +1363,17 @@ private fun downloadFile(context: Context, url: String, fileName: String, cookie
         Toast.makeText(context, "Download started: $fileName", Toast.LENGTH_SHORT).show()
     } catch (e: Exception) {
         Toast.makeText(context, "Download failed: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+    }
+}
+
+private fun formatTime(ms: Int): String {
+    val totalSeconds = (ms.coerceAtLeast(0)) / 1000
+    val seconds = totalSeconds % 60
+    val minutes = (totalSeconds / 60) % 60
+    val hours = totalSeconds / 3600
+    return if (hours > 0) {
+        String.format(java.util.Locale.US, "%d:%02d:%02d", hours, minutes, seconds)
+    } else {
+        String.format(java.util.Locale.US, "%d:%02d", minutes, seconds)
     }
 }

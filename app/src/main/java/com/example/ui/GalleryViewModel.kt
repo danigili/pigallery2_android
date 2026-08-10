@@ -496,8 +496,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 else media.sortedByDescending { it.name.lowercase() }
             }
             "date" -> {
-                if (mAsc) media.sortedBy { it.metadata?.creationDate ?: 0L }
-                else media.sortedByDescending { it.metadata?.creationDate ?: 0L }
+                if (mAsc) media.sortedBy { DateUtils.getLocalTimeMs(it.metadata?.creationDate, it.metadata?.creationDateOffset) }
+                else media.sortedByDescending { DateUtils.getLocalTimeMs(it.metadata?.creationDate, it.metadata?.creationDateOffset) }
             }
             "random" -> media.shuffled()
             else -> media
@@ -923,12 +923,12 @@ fun loadAlbums() {
                 val grouped = uniqueMedia
                     .filter { it.metadata?.creationDate != null }
                     .filter { media ->
-                        val creationSecs = media.metadata?.creationDate ?: 0L
-                        getYearFromTimestamp(creationSecs) < currentYear
+                        val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
+                        getYearFromTimestamp(localMs) < currentYear
                     }
                     .groupBy { media ->
-                        val creationSecs = media.metadata?.creationDate ?: 0L
-                        getYearFromTimestamp(creationSecs)
+                        val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
+                        getYearFromTimestamp(localMs)
                     }.toSortedMap(compareByDescending { it })
 
                 _rediscoverState.value = RediscoverUiState.Success(grouped)
@@ -1005,7 +1005,7 @@ fun loadAlbums() {
 
     private fun getYearFromTimestamp(timestamp: Long): Int {
         val ms = if (timestamp < 10000000000L) timestamp * 1000L else timestamp
-        val cal = java.util.Calendar.getInstance()
+        val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
         cal.timeInMillis = ms
         return cal.get(java.util.Calendar.YEAR)
     }

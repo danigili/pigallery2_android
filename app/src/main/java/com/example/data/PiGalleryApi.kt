@@ -129,6 +129,7 @@ data class ApiGPSData(
 data class ApiMediaMetadata(
     val size: ApiSize? = null,
     val creationDate: Long? = null,
+    val creationDateOffset: String? = null,
     val cameraData: ApiCameraData? = null,
     val keywords: List<String>? = null,
     val faces: List<ApiFace>? = null,
@@ -181,6 +182,17 @@ class PiGalleryApi(private val context: android.content.Context) {
 
         val creationDate = (metaMap["creationDate"] as? Number)?.toLong()
             ?: (metaMap["t"] as? Number)?.toLong()
+
+        val offsetNumber = (metaMap["o"] as? Number)?.toInt()
+        val creationDateOffset = if (offsetNumber != null) {
+            val sign = if (offsetNumber < 0) "-" else "+"
+            val absOffset = Math.abs(offsetNumber)
+            val hours = absOffset / 60
+            val minutes = absOffset % 60
+            String.format(java.util.Locale.US, "%s%02d:%02d", sign, hours, minutes)
+        } else {
+            metaMap["creationDateOffset"] as? String
+        }
 
         val cwFaces = cwMap?.get("faces") as? List<*>
         val cwKeywords = cwMap?.get("keywords") as? List<*>
@@ -268,7 +280,7 @@ class PiGalleryApi(private val context: android.content.Context) {
             } else null
         } else null
 
-        return ApiMediaMetadata(size, creationDate, cameraData, keywords, faces, duration, gps)
+        return ApiMediaMetadata(size, creationDate, creationDateOffset, cameraData, keywords, faces, duration, gps)
     }
 
     private val prefs = PreferencesManager(context)
