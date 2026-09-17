@@ -24,6 +24,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.IOException
 
+import androidx.paging.Pager
+import androidx.paging.PagingConfig
+import androidx.paging.PagingData
+import androidx.paging.cachedIn
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
+
 sealed interface LoginUiState {
     object Idle : LoginUiState
     object Loading : LoginUiState
@@ -67,6 +74,10 @@ enum class ActiveTab {
 class GalleryViewModel(application: Application) : AndroidViewModel(application) {
     val prefs = PreferencesManager(application)
     val api = PiGalleryApi(application)
+    val searchHistoryManager = com.example.data.SearchHistoryManager(application)
+
+    val localSearchHistory = searchHistoryManager.searchHistory
+
 
     // Active Navigation Tab
     private val _activeTab = MutableStateFlow(ActiveTab.GALLERY)
@@ -81,7 +92,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val galleryState: StateFlow<GalleryUiState> = _galleryState.asStateFlow()
 
     // Navigation Stack (list of relative path strings)
-    private val _pathHistory = MutableStateFlow<List<String>>(listOf(""))
+    private val _pathHistory = MutableStateFlow<List<String>>(buildInitialPathStack(prefs.defaultRootPath))
     val pathHistory: StateFlow<List<String>> = _pathHistory.asStateFlow()
 
     val currentPath: String
@@ -95,6 +106,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val activeMediaList: StateFlow<List<ApiMedia>> = _activeMediaList.asStateFlow()
     
     val videoFinished = MutableSharedFlow<Unit>(replay = 0)
+
+    val pagingDataFlow: Flow<PagingData<ApiMedia>> = Pager(
+        config = PagingConfig(pageSize = 50, enablePlaceholders = false, prefetchDistance = 10)
+    ) {
+        MediaPagingSource(_activeMediaList.value)
+    }.flow.cachedIn(viewModelScope)
 
     fun emitVideoFinished() {
         viewModelScope.launch { videoFinished.emit(Unit) }
@@ -153,6 +170,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val aspectRatio = MutableStateFlow(prefs.aspectRatio)
     val themeColorOption = MutableStateFlow(prefs.themeColor)
     val themeMode = MutableStateFlow(prefs.themeMode)
+    val defaultRootPath = MutableStateFlow(prefs.defaultRootPath)
 
     // Search and directory flattening states
     val isSearchActive = MutableStateFlow(false)
@@ -177,6 +195,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun executeSearch() {
         showSearchSuggestions.value = false
+        val currentQuery = searchQuery.value.trim()
+        if (currentQuery.isNotEmpty()) {
+            viewModelScope.launch {
+                searchHistoryManager.addSearchQuery(currentQuery)
+            }
+        }
         loadCurrentDirectory()
     }
 
@@ -577,7 +601,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 isLoggedIn.value = true
 
                 _loginState.value = LoginUiState.Success("Connected successfully!")
-                _pathHistory.value = listOf("") // Reset path history
+                _pathHistory.value = buildInitialPathStack(prefs.defaultRootPath) // Reset path history
                 _activeTab.value = ActiveTab.GALLERY
 
                 loadCurrentDirectory()
@@ -1003,6 +1027,30 @@ fun loadAlbums() {
         themeMode.value = value
     }
 
+    private fun buildInitialPathStack(defaultRoot: String): List<String> {
+        if (defaultRoot.isBlank()) return listOf("")
+        
+        val parts = defaultRoot.split("/")
+        val stack = mutableListOf("")
+        var current = ""
+        for (part in parts) {
+            if (part.isNotBlank()) {
+                current = if (current.isEmpty()) part else "$current/$part"
+                stack.add(current)
+            }
+        }
+        return stack
+    }
+
+    fun setDefaultRootPath(value: String) {
+        prefs.defaultRootPath = value
+        defaultRootPath.value = value
+        _pathHistory.value = buildInitialPathStack(value)
+        if (_activeTab.value == ActiveTab.GALLERY) {
+            loadCurrentDirectory()
+        }
+    }
+
     private fun getYearFromTimestamp(timestamp: Long): Int {
         val ms = if (timestamp < 10000000000L) timestamp * 1000L else timestamp
         val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
@@ -1252,7 +1300,7 @@ fun loadAlbums() {
         savedServerUrl.value = ""
         savedUsername.value = ""
         savedPassword.value = ""
-        _pathHistory.value = listOf("")
+        _pathHistory.value = buildInitialPathStack(prefs.defaultRootPath)
         _loginState.value = LoginUiState.Idle
         _activeTab.value = ActiveTab.GALLERY
         _selectedAlbum.value = null

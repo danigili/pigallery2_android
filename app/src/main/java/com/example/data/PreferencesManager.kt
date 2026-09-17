@@ -33,7 +33,12 @@ class PreferencesManager(context: Context) {
         private const val KEY_THEME_COLOR = "theme_color"
         private const val KEY_THEME_MODE = "theme_mode"
         private const val KEY_PEOPLE_FALLBACK_TO_KEYWORDS = "people_fallback_to_keywords"
+        private const val KEY_DEFAULT_ROOT_PATH = "default_root_path"
     }
+
+    var defaultRootPath: String
+        get() = prefs.getString(KEY_DEFAULT_ROOT_PATH, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_DEFAULT_ROOT_PATH, value).apply()
 
     var serverUrl: String
         get() = prefs.getString(KEY_SERVER_URL, "") ?: ""

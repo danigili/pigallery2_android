@@ -96,6 +96,9 @@ import androidx.compose.foundation.focusable
 
 
 
+import androidx.paging.compose.collectAsLazyPagingItems
+import androidx.paging.compose.LazyPagingItems
+
 val CameraLensSide: ImageVector
     get() = ImageVector.Builder(
         name = "CameraLensSide",
@@ -216,6 +219,45 @@ fun MediaViewerDialog(
     val currentMedia = mediaList.getOrNull(pagerState.currentPage) ?: media
     val mediaUrl = viewModel.getOriginalMediaUrl(currentMedia)
 
+    LaunchedEffect(pagerState.currentPage) {
+        val prefetchDistance = 2
+        for (i in 1..prefetchDistance) {
+            val nextPage = pagerState.currentPage + i
+            if (nextPage < mediaList.size) {
+                val nextMedia = mediaList[nextPage]
+                if (!nextMedia.isVideo) {
+                    val request = ImageRequest.Builder(context)
+                        .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .networkCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .data(viewModel.getOriginalMediaUrl(nextMedia))
+                        .apply {
+                            if (cookies.isNotEmpty()) setHeader("Cookie", cookies)
+                        }
+                        .build()
+                    context.imageLoader.enqueue(request)
+                }
+            }
+            
+            val prevPage = pagerState.currentPage - i
+            if (prevPage >= 0) {
+                val prevMedia = mediaList[prevPage]
+                if (!prevMedia.isVideo) {
+                    val request = ImageRequest.Builder(context)
+                        .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .networkCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .data(viewModel.getOriginalMediaUrl(prevMedia))
+                        .apply {
+                            if (cookies.isNotEmpty()) setHeader("Cookie", cookies)
+                        }
+                        .build()
+                    context.imageLoader.enqueue(request)
+                }
+            }
+        }
+    }
+
     var showMetadata by remember { mutableStateOf(false) }
     var showBars by remember { mutableStateOf(true) }
     var showFaceRegions by remember { mutableStateOf(false) }
@@ -266,6 +308,9 @@ fun MediaViewerDialog(
                 if (!prefetchMedia.isVideo) {
                     val prefetchUrl = viewModel.getPreloadMediaUrl(prefetchMedia) ?: viewModel.getOriginalMediaUrl(prefetchMedia)
                     val request = ImageRequest.Builder(context)
+                        .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .networkCachePolicy(coil.request.CachePolicy.ENABLED)
                         .data(prefetchUrl)
                         .addHeader("Cookie", cookies)
                         .build()
@@ -474,6 +519,7 @@ fun MediaViewerDialog(
                 ) {
                     HorizontalPager(
                         state = pagerState,
+                        beyondViewportPageCount = 1,
                         modifier = Modifier.fillMaxSize()
                     ) { page ->
                         val pageMedia = mediaList[page]
@@ -1124,7 +1170,10 @@ fun MediaViewerItem(
 
             // Image View with Pinch to Zoom & dynamic Client-Side Rotation
             val builder = ImageRequest.Builder(context)
-                .data(currentUrl)
+                .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .networkCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .data(currentUrl)
                 .crossfade(true)
 
             if (currentUrl == originalUrl) {
@@ -1164,9 +1213,20 @@ fun MediaViewerItem(
                 modifier = Modifier
                     .fillMaxSize()
                     .pointerInput(Unit) {
-                        detectTapGestures(onTap = { onToggleBars() })
+                        detectTapGestures(
+                            onDoubleTap = {
+                                if (scale > 1f) {
+                                    scale = 1f
+                                    offsetX = 0f
+                                    offsetY = 0f
+                                } else {
+                                    scale = 2.5f
+                                }
+                            },
+                            onTap = { onToggleBars() }
+                        )
                     }
-                    .pointerInput(scale) {
+                    .pointerInput(intrinsicSize) {
                         awaitPointerEventScope {
                             while (true) {
                                 val event = awaitPointerEvent()
@@ -1177,18 +1237,38 @@ fun MediaViewerItem(
                                 if (pointersCount > 1 || scale > 1f) {
                                     val nextScale = (scale * zoomChange).coerceIn(1f, 5f)
                                     scale = nextScale
-                                    if (nextScale > 1f) {
-                                        offsetX += panChange.x * nextScale
-                                        offsetY += panChange.y * nextScale
+                                    
+                                    var consumedPan = false
+                                    
+                                    if (nextScale > 1f && intrinsicSize.width > 0f && intrinsicSize.height > 0f) {
+                                        val scaleX = size.width / intrinsicSize.width
+                                        val scaleY = size.height / intrinsicSize.height
+                                        val fitScale = minOf(scaleX, scaleY)
+                                        val displayWidth = intrinsicSize.width * fitScale
+                                        val displayHeight = intrinsicSize.height * fitScale
+                                        
+                                        val maxOffsetX = maxOf(0f, (displayWidth * nextScale - size.width) / 2f)
+                                        val maxOffsetY = maxOf(0f, (displayHeight * nextScale - size.height) / 2f)
+                                        
+                                        val oldOffsetX = offsetX
+                                        offsetX = (offsetX + panChange.x * nextScale).coerceIn(-maxOffsetX, maxOffsetX)
+                                        offsetY = (offsetY + panChange.y * nextScale).coerceIn(-maxOffsetY, maxOffsetY)
+                                        
+                                        val movedX = kotlin.math.abs(offsetX - oldOffsetX) > 0.01f
+                                        val isZooming = pointersCount > 1 || zoomChange != 1f
+                                        if (movedX || isZooming) {
+                                            consumedPan = true
+                                        }
                                     } else {
                                         offsetX = 0f
                                         offsetY = 0f
                                     }
                                     
-                                    // Consume to avoid swipe interference
-                                    event.changes.forEach {
-                                        if (it.positionChanged()) {
-                                            it.consume()
+                                    if (consumedPan) {
+                                        event.changes.forEach {
+                                            if (it.positionChanged()) {
+                                                it.consume()
+                                            }
                                         }
                                     }
                                 } else {

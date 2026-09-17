@@ -645,6 +645,7 @@ fun GalleryTabContent(viewModel: GalleryViewModel) {
     val searchQuery by viewModel.searchQuery.collectAsState()
     val searchSuggestions by viewModel.searchSuggestions.collectAsState()
     val showSearchSuggestions by viewModel.showSearchSuggestions.collectAsState()
+    val localSearchHistory by viewModel.localSearchHistory.collectAsState(initial = emptyList())
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -702,8 +703,13 @@ fun GalleryTabContent(viewModel: GalleryViewModel) {
             SearchSuggestionsOverlay(
                 searchQuery = searchQuery,
                 searchSuggestions = searchSuggestions,
+                localSearchHistory = localSearchHistory,
                 onSuggestionClick = { clickedSuggestion ->
                     viewModel.setSearchQueryFromSuggestion(clickedSuggestion)
+                },
+                onHistoryClick = { query ->
+                    viewModel.updateSearchQueryText(query)
+                    viewModel.executeSearch()
                 },
                 onPrefixClick = { prefix ->
                     viewModel.appendPrefixToSearch(prefix)
@@ -722,7 +728,9 @@ fun GalleryTabContent(viewModel: GalleryViewModel) {
 fun SearchSuggestionsOverlay(
     searchQuery: String,
     searchSuggestions: List<String>,
+    localSearchHistory: List<String>,
     onSuggestionClick: (String) -> Unit,
+    onHistoryClick: (String) -> Unit,
     onPrefixClick: (String) -> Unit,
     onRemoveToken: (String) -> Unit,
     modifier: Modifier = Modifier
@@ -763,7 +771,7 @@ fun SearchSuggestionsOverlay(
             HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
         }
 
-        if (searchSuggestions.isEmpty()) {
+        if (searchSuggestions.isEmpty() && localSearchHistory.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
                     text = "No suggestions",
@@ -777,26 +785,62 @@ fun SearchSuggestionsOverlay(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(searchSuggestions) { suggestion ->
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onSuggestionClick(suggestion) },
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                if (searchSuggestions.isEmpty() && localSearchHistory.isNotEmpty()) {
+                    item {
+                        Text(
+                            text = "Recent Searches",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(bottom = 4.dp, start = 4.dp)
                         )
-                    ) {
-                        Row(
+                    }
+                    items(localSearchHistory) { historyItem ->
+                        Card(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = suggestion,
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onSurface
+                                .clickable { onHistoryClick(historyItem) },
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
                             )
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.History, contentDescription = "History", modifier = Modifier.padding(end = 16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(
+                                    text = historyItem,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+                } else if (searchSuggestions.isNotEmpty()) {
+                    items(searchSuggestions) { suggestion ->
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onSuggestionClick(suggestion) },
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Search, contentDescription = "Search", modifier = Modifier.padding(end = 16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(
+                                    text = suggestion,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
                         }
                     }
                 }
@@ -809,6 +853,7 @@ fun SearchSuggestionsOverlay(
 @Composable
 fun AlbumsTabContent(viewModel: GalleryViewModel) {
     val albumsState by viewModel.albumsState.collectAsState()
+    var searchQuery by remember { mutableStateOf("") }
     val selectedAlbum by viewModel.selectedAlbum.collectAsState()
     val albumContentState by viewModel.albumContentState.collectAsState()
 
@@ -880,43 +925,75 @@ fun AlbumsTabContent(viewModel: GalleryViewModel) {
                     }
                 }
                 is AlbumsUiState.Success -> {
-                    val albums = state.albums
-                    if (albums.isEmpty()) {
-                        EmptyStateView("No saved albums", "Create smart query albums in PiGallery2 web app to view them here.")
-                    } else {
+                    val allAlbums = state.albums
+                    val albums = if (searchQuery.isBlank()) allAlbums else allAlbums.filter { it.name.contains(searchQuery, ignoreCase = true) }
+                    
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        androidx.compose.material3.TextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = { Text("Search albums...") },
+                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
+                            trailingIcon = {
+                                if (searchQuery.isNotEmpty()) {
+                                    IconButton(onClick = { searchQuery = "" }) {
+                                        Icon(Icons.Default.Clear, contentDescription = "Clear search")
+                                    }
+                                }
+                            },
+                            singleLine = true,
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(percent = 50),
+                            colors = androidx.compose.material3.TextFieldDefaults.colors(
+                                focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                                unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                                disabledIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                        )
 
-                        val spacingDp = spacing.dp
-                        val cornerRadiusDp = cornerRadius.dp
-                        
-                        val isTv = LocalContext.current.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
-                        val firstItemFocusRequester = remember { FocusRequester() }
-                        
-                        LaunchedEffect(albums) {
-                            if (isTv && albums.isNotEmpty()) {
-                                try {
-                                    kotlinx.coroutines.delay(100)
-                                    firstItemFocusRequester.requestFocus()
-                                } catch (e: Exception) {}
+                        if (albums.isEmpty()) {
+                            if (allAlbums.isEmpty()) {
+                                EmptyStateView("No saved albums", "Create smart query albums in PiGallery2 web app to view them here.")
+                            } else {
+                                EmptyStateView("No matching albums", "Try a different search term.")
                             }
-                        }
-                        
-                        LazyVerticalGrid(
-                            columns = GridCells.Fixed(itemsPerRow),
-                            contentPadding = PaddingValues(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(spacingDp),
-                            horizontalArrangement = Arrangement.spacedBy(spacingDp),
-                            modifier = Modifier.fillMaxSize()
-                        ) {
-                            items(count = albums.size, key = { index -> "album_${albums[index].name}_${albums[index].id}" }) { index -> val album = albums[index]
-                                val focusModifier = if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier
-                                AlbumCard(
-                                    modifier = focusModifier,
-                                    album = album,
-                                    viewModel = viewModel,
-                                    cornerRadius = cornerRadiusDp,
-                                    aspectRatio = aspectRatio
-                                ) {
-                                    viewModel.selectAlbum(album)
+                        } else {
+    
+                            val spacingDp = spacing.dp
+                            val cornerRadiusDp = cornerRadius.dp
+                            
+                            val isTv = LocalContext.current.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+                            val firstItemFocusRequester = remember { FocusRequester() }
+                            
+                            LaunchedEffect(albums) {
+                                if (isTv && albums.isNotEmpty()) {
+                                    try {
+                                        kotlinx.coroutines.delay(100)
+                                        firstItemFocusRequester.requestFocus()
+                                    } catch (e: Exception) {}
+                                }
+                            }
+                            
+                            LazyVerticalGrid(
+                                columns = GridCells.Fixed(itemsPerRow),
+                                contentPadding = PaddingValues(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(spacingDp),
+                                horizontalArrangement = Arrangement.spacedBy(spacingDp),
+                                modifier = Modifier.weight(1f).fillMaxWidth()
+                            ) {
+                                items(count = albums.size, key = { index -> "album_${albums[index].name}_${albums[index].id}" }) { index -> val album = albums[index]
+                                    val focusModifier = if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier
+                                    AlbumCard(
+                                        modifier = focusModifier,
+                                        album = album,
+                                        viewModel = viewModel,
+                                        cornerRadius = cornerRadiusDp,
+                                        aspectRatio = aspectRatio
+                                    ) {
+                                        viewModel.selectAlbum(album)
+                                    }
                                 }
                             }
                         }
@@ -1065,6 +1142,7 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
     var thumbnailSuffix by remember { mutableStateOf(viewModel.prefs.thumbnailPathSuffix) }
     var preloadSuffix by remember { mutableStateOf(viewModel.prefs.preloadPathSuffix) }
     var videoSuffix by remember { mutableStateOf(viewModel.prefs.videoPathSuffix) }
+    var defaultRootPath by remember { mutableStateOf(viewModel.prefs.defaultRootPath) }
 
     // Visual states
     var showItemCount by remember { mutableStateOf(viewModel.prefs.showDirectoryItemCount) }
@@ -1588,6 +1666,39 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                     }
                 }
                 
+                // --- Path Configuration ---
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Path Configuration",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        OutlinedTextField(
+                            value = defaultRootPath,
+                            onValueChange = {
+                                defaultRootPath = it
+                                viewModel.setDefaultRootPath(it)
+                            },
+                            label = { Text("Default Root Path (e.g. 'Photos/2023')") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Leave empty for root gallery.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+
                 // --- Suffix Settings ---
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -1762,6 +1873,9 @@ fun AlbumCard(
 
             if (coverName != null && coverDirectory != null) {
                 val imageRequest = ImageRequest.Builder(context)
+                    .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .networkCachePolicy(coil.request.CachePolicy.ENABLED)
                     .data(viewModel.getAlbumCoverUrl(coverName, coverDirectory))
                     .apply {
                         if (cookies.isNotEmpty()) {
@@ -1842,7 +1956,10 @@ fun RediscoverMediaItem(
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             val imageRequest = ImageRequest.Builder(context)
-                .data(viewModel.getThumbnailUrl(media))
+                .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .networkCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .data(viewModel.getThumbnailUrl(media))
                 .apply {
                     if (cookies.isNotEmpty()) {
                         setHeader("Cookie", cookies)
@@ -2016,7 +2133,10 @@ fun GalleryContentGrid(
                             val context = LocalContext.current
                             val imageRequest = remember(coverUrl, cookies) {
                                 val builder = ImageRequest.Builder(context)
-                                    .data(coverUrl)
+                                    .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .networkCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .data(coverUrl)
                                     .crossfade(true)
                                 if (cookies.isNotEmpty()) {
                                     builder.addHeader("Cookie", cookies)
@@ -2139,7 +2259,10 @@ fun GalleryContentGrid(
                 Box(modifier = Modifier.fillMaxSize()) {
                     // Build dynamic Coil loader with Auth Cookies attached
                     val imageRequest = ImageRequest.Builder(context)
-                        .data(viewModel.getThumbnailUrl(media))
+                        .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .networkCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .data(viewModel.getThumbnailUrl(media))
                         .apply {
                             if (cookies.isNotEmpty()) {
                                 setHeader("Cookie", cookies)
@@ -2449,6 +2572,7 @@ fun SortDialog(
 @Composable
 fun PersonsTabContent(viewModel: GalleryViewModel) {
     val personsState by viewModel.personsState.collectAsState()
+    var searchQuery by remember { mutableStateOf("") }
     val selectedPerson by viewModel.selectedPerson.collectAsState()
     val personContentState by viewModel.personContentState.collectAsState()
     val itemsPerRowPortrait by viewModel.itemsPerRowPortrait.collectAsState()
@@ -2515,38 +2639,71 @@ fun PersonsTabContent(viewModel: GalleryViewModel) {
                     }
                 }
                 is PersonsUiState.Success -> {
-                    if (state.persons.isEmpty()) {
-                        EmptyStateView("No persons found", "No faces detected or server hasn't scanned persons yet.")
-                    } else {
-                        val spacingDp = spacing.dp
-                        
-                        val isTv = LocalContext.current.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
-                        val firstItemFocusRequester = remember { FocusRequester() }
-                        
-                        LaunchedEffect(state.persons) {
-                            if (isTv && state.persons.isNotEmpty()) {
-                                try {
-                                    kotlinx.coroutines.delay(100)
-                                    firstItemFocusRequester.requestFocus()
-                                } catch (e: Exception) {}
+                    val allPersons = state.persons
+                    val persons = if (searchQuery.isBlank()) allPersons else allPersons.filter { it.name.contains(searchQuery, ignoreCase = true) }
+                    
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        androidx.compose.material3.TextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = { Text("Search persons...") },
+                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
+                            trailingIcon = {
+                                if (searchQuery.isNotEmpty()) {
+                                    IconButton(onClick = { searchQuery = "" }) {
+                                        Icon(Icons.Default.Clear, contentDescription = "Clear search")
+                                    }
+                                }
+                            },
+                            singleLine = true,
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(percent = 50),
+                            colors = androidx.compose.material3.TextFieldDefaults.colors(
+                                focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                                unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                                disabledIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                        )
+
+                        if (persons.isEmpty()) {
+                            if (allPersons.isEmpty()) {
+                                EmptyStateView("No persons found", "No faces detected or server hasn't scanned persons yet.")
+                            } else {
+                                EmptyStateView("No matching persons", "Try a different search term.")
                             }
-                        }
-                        
-                        LazyVerticalGrid(
-                            columns = GridCells.Fixed(itemsPerRow),
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(spacingDp),
-                            verticalArrangement = Arrangement.spacedBy(spacingDp)
-                        ) {
-                            items(count = state.persons.size, key = { index -> state.persons[index].name }) { index -> val person = state.persons[index]
-                                val focusModifier = if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier
-                                PersonItem(
-                                    modifier = focusModifier,
-                                    person = person,
-                                    viewModel = viewModel,
-                                    onClick = { viewModel.selectPerson(person) }
-                                )
+                        } else {
+                            val spacingDp = spacing.dp
+                            
+                            val isTv = LocalContext.current.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+                            val firstItemFocusRequester = remember { FocusRequester() }
+                            
+                            LaunchedEffect(persons) {
+                                if (isTv && persons.isNotEmpty()) {
+                                    try {
+                                        kotlinx.coroutines.delay(100)
+                                        firstItemFocusRequester.requestFocus()
+                                    } catch (e: Exception) {}
+                                }
+                            }
+                            
+                            LazyVerticalGrid(
+                                columns = GridCells.Fixed(itemsPerRow),
+                                modifier = Modifier.weight(1f).fillMaxWidth(),
+                                contentPadding = PaddingValues(16.dp),
+                                horizontalArrangement = Arrangement.spacedBy(spacingDp),
+                                verticalArrangement = Arrangement.spacedBy(spacingDp)
+                            ) {
+                                items(count = persons.size, key = { index -> persons[index].name }) { index -> val person = persons[index]
+                                    val focusModifier = if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier
+                                    PersonItem(
+                                        modifier = focusModifier,
+                                        person = person,
+                                        viewModel = viewModel,
+                                        onClick = { viewModel.selectPerson(person) }
+                                    )
+                                }
                             }
                         }
                     }
@@ -2567,7 +2724,10 @@ fun PersonItem(modifier: Modifier = Modifier, person: com.example.data.ApiPerson
     val cardRatio = if (aspectRatio > 0f) aspectRatio else 1f
     
     val imgRequest = ImageRequest.Builder(LocalContext.current)
-        .data(thumbnailUrl)
+        .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .networkCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .data(thumbnailUrl)
         .apply {
             if (cookies.isNotEmpty()) {
                 addHeader("Cookie", cookies)
