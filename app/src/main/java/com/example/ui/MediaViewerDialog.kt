@@ -984,6 +984,17 @@ fun MetadataContent(media: ApiMedia, onClose: () -> Unit) {
         MetadataRow(icon = Icons.Outlined.DateRange, label = "Date Taken", value = dateStr)
 
         MetadataRow(icon = if (media.isVideo) Icons.Outlined.Videocam else Icons.Outlined.Image, label = "Type", value = if (media.isVideo) "Video (MP4)" else "Image")
+
+        media.metadata?.fileSize?.let { bytes ->
+            if (bytes > 0) {
+                MetadataRow(icon = Icons.Outlined.SdStorage, label = "File Size", value = formatFileSize(bytes))
+            }
+        }
+
+        val location = listOfNotNull(media.metadata?.city, media.metadata?.state, media.metadata?.country).distinct()
+        if (location.isNotEmpty()) {
+            MetadataRow(icon = Icons.Outlined.Place, label = "Location", value = location.joinToString(", "))
+        }
         
         media.metadata?.cameraData?.let { camera ->
             val cameraName = listOfNotNull(camera.make, camera.model).joinToString(" ")
@@ -1500,6 +1511,18 @@ private fun downloadFile(context: Context, url: String, fileName: String, cookie
     } catch (e: Exception) {
         Toast.makeText(context, "Download failed: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
     }
+}
+
+private fun formatFileSize(bytes: Long): String {
+    if (bytes < 1024) return "$bytes B"
+    val units = listOf("KB", "MB", "GB", "TB")
+    var value = bytes / 1024.0
+    var unitIndex = 0
+    while (value >= 1024 && unitIndex < units.size - 1) {
+        value /= 1024
+        unitIndex++
+    }
+    return String.format(java.util.Locale.US, "%.1f %s", value, units[unitIndex])
 }
 
 private fun formatTime(ms: Int): String {
