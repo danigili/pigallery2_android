@@ -26,6 +26,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.layout.*
@@ -399,8 +404,6 @@ fun MediaViewerDialog(
     // Map to track custom client-side image rotations per page/index
     val rotationMap = remember { mutableStateMapOf<Int, Float>() }
 
-    androidx.activity.compose.BackHandler(onBack = onDismiss)
-
     val view = LocalView.current
     val window = remember(view) {
         var contextActivity = context
@@ -454,8 +457,26 @@ fun MediaViewerDialog(
     }
 
     val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
-    
-    androidx.activity.compose.BackHandler { onDismiss() }
+
+    // Swipe-up details panel (portrait): 0 = hidden, detailsHeightPx = fully shown
+    val density = LocalDensity.current
+    val detailsHeightPx = with(density) { (configuration.screenHeightDp * 0.55f).dp.toPx() }
+    val detailsOffset = remember { Animatable(0f) }
+    var isCurrentZoomed by remember { mutableStateOf(false) }
+
+    LaunchedEffect(showMetadata, isLandscape) {
+        val target = if (showMetadata && !isLandscape) detailsHeightPx else 0f
+        if (detailsOffset.targetValue != target) {
+            detailsOffset.animateTo(target)
+        }
+    }
+
+    LaunchedEffect(pagerState.currentPage) {
+        isCurrentZoomed = false
+    }
+
+    androidx.activity.compose.BackHandler(enabled = showMetadata) { showMetadata = false }
+    androidx.activity.compose.BackHandler(enabled = !showMetadata) { onDismiss() }
 
     Box(
         modifier = Modifier
@@ -469,6 +490,25 @@ fun MediaViewerDialog(
                         .fillMaxHeight()
                         .focusRequester(focusRequester)
                         .focusable()
+                        .draggable(
+                            orientation = Orientation.Vertical,
+                            enabled = !isLandscape && !isTv && !isCurrentZoomed,
+                            state = rememberDraggableState { delta ->
+                                coroutineScope.launch {
+                                    detailsOffset.snapTo((detailsOffset.value - delta).coerceIn(0f, detailsHeightPx))
+                                }
+                            },
+                            onDragStopped = { velocity ->
+                                val open = when {
+                                    velocity < -1000f -> true
+                                    velocity > 1000f -> false
+                                    else -> detailsOffset.value > detailsHeightPx / 3f
+                                }
+                                showMetadata = open
+                                detailsOffset.animateTo(if (open) detailsHeightPx else 0f)
+                            }
+                        )
+                        .graphicsLayer { translationY = -detailsOffset.value / 2f }
                         .onKeyEvent { keyEvent ->
                             if (keyEvent.type == KeyEventType.KeyDown) {
                                 interactionCount++
@@ -535,7 +575,14 @@ fun MediaViewerDialog(
                             onVideoPlayingChange = { if (page == pagerState.currentPage) isVideoPlaying = it },
                             onVideoCompletion = { videoCompletionTrigger = System.currentTimeMillis() },
                             onToggleBars = {
-                                showBars = !showBars
+                                if (showMetadata && !isLandscape) {
+                                    showMetadata = false
+                                } else {
+                                    showBars = !showBars
+                                }
+                            },
+                            onZoomChange = { zoomed ->
+                                if (page == pagerState.currentPage) isCurrentZoomed = zoomed
                             },
                             showBars = showBars,
                             onVideoPrepared = { duration, videoView ->
@@ -574,21 +621,21 @@ fun MediaViewerDialog(
                 }
             }
 
-            // Slide-up Metadata Overlay Sheet (Portrait only)
-            if (!isLandscape) {
-                AnimatedVisibility(
-                    visible = showMetadata,
-                    enter = slideInVertically { it },
-                    exit = slideOutVertically { it },
-                    modifier = Modifier.align(Alignment.BottomCenter)
+            // Details panel revealed by swiping the image up (Portrait only)
+            if (!isLandscape && detailsOffset.value > 0f) {
+                val detailsHeightDp = with(density) { detailsHeightPx.toDp() }
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(detailsHeightDp)
+                        .graphicsLayer { translationY = detailsHeightPx - detailsOffset.value }
                 ) {
                     Card(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 360.dp)
-                            .windowInsetsPadding(WindowInsets.safeDrawing)
-                            .padding(16.dp),
-                        shape = RoundedCornerShape(16.dp),
+                            .fillMaxSize()
+                            .windowInsetsPadding(WindowInsets.navigationBars),
+                        shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
                         colors = CardDefaults.cardColors(
                             containerColor = Color.Black.copy(alpha = 0.85f)
                         ),
@@ -992,6 +1039,7 @@ fun MediaViewerItem(
     onVideoPlayingChange: (Boolean) -> Unit,
     onVideoCompletion: () -> Unit,
     onToggleBars: () -> Unit,
+    onZoomChange: (Boolean) -> Unit = {},
     showBars: Boolean,
     onVideoPrepared: (duration: Int, videoView: VideoView) -> Unit
 ) {
@@ -1004,6 +1052,11 @@ fun MediaViewerItem(
     var scale by remember { mutableStateOf(1f) }
     var offsetX by remember { mutableStateOf(0f) }
     var offsetY by remember { mutableStateOf(0f) }
+
+    val isZoomed = scale > 1f
+    LaunchedEffect(isZoomed) {
+        onZoomChange(isZoomed)
+    }
 
     // Clean up temp files upon entering and exiting
     DisposableEffect(media.id) {
