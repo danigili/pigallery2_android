@@ -167,6 +167,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val itemsPerRowLandscape = MutableStateFlow(prefs.itemsPerRowLandscape)
     val cornerRadius = MutableStateFlow(prefs.cornerRadius)
     val spacing = MutableStateFlow(prefs.spacing)
+    val edgeToEdgeGrid = MutableStateFlow(prefs.edgeToEdgeGrid)
     val aspectRatio = MutableStateFlow(prefs.aspectRatio)
     val themeColorOption = MutableStateFlow(prefs.themeColor)
     val themeMode = MutableStateFlow(prefs.themeMode)
@@ -451,6 +452,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             "name", "date" -> {
                 if (fAsc) persons.sortedBy { it.name.lowercase() }
                 else persons.sortedByDescending { it.name.lowercase() }
+            }
+            "count" -> {
+                if (fAsc) persons.sortedBy { it.cache?.count ?: 0 }
+                else persons.sortedByDescending { it.cache?.count ?: 0 }
             }
             "random" -> persons.shuffled()
             else -> persons
@@ -1010,6 +1015,11 @@ fun loadAlbums() {
     fun setSpacing(value: Int) {
         prefs.spacing = value
         spacing.value = value
+    }
+
+    fun setEdgeToEdgeGrid(value: Boolean) {
+        prefs.edgeToEdgeGrid = value
+        edgeToEdgeGrid.value = value
     }
 
     fun setAspectRatio(value: Float) {
