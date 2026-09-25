@@ -27,6 +27,7 @@ class PreferencesManager(context: Context) {
         private const val KEY_ITEMS_PER_ROW_LANDSCAPE = "items_per_row_landscape"
         private const val KEY_CORNER_RADIUS = "corner_radius"
         private const val KEY_SPACING = "spacing"
+        private const val KEY_EDGE_TO_EDGE_GRID = "edge_to_edge_grid"
         private const val KEY_ASPECT_RATIO = "aspect_ratio"
         private const val KEY_SORT_BY = "sort_by"
         private const val KEY_SORT_DIRECTION = "sort_direction"
@@ -111,6 +112,10 @@ class PreferencesManager(context: Context) {
     var spacing: Int
         get() = prefs.getInt(KEY_SPACING, 5)
         set(value) = prefs.edit().putInt(KEY_SPACING, value).apply()
+
+    var edgeToEdgeGrid: Boolean
+        get() = prefs.getBoolean(KEY_EDGE_TO_EDGE_GRID, false)
+        set(value) = prefs.edit().putBoolean(KEY_EDGE_TO_EDGE_GRID, value).apply()
 
     var aspectRatio: Float
         get() = prefs.getFloat(KEY_ASPECT_RATIO, 1.0f)
