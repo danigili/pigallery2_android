@@ -452,6 +452,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 if (fAsc) persons.sortedBy { it.name.lowercase() }
                 else persons.sortedByDescending { it.name.lowercase() }
             }
+            "count" -> {
+                if (fAsc) persons.sortedBy { it.cache?.count ?: 0 }
+                else persons.sortedByDescending { it.cache?.count ?: 0 }
+            }
             "random" -> persons.shuffled()
             else -> persons
         }

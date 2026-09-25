@@ -444,11 +444,13 @@ fun GalleryScreen(
                                     else -> "Sort folders by"
                                 }
                                 val showFolderSortOptions = activeTab == ActiveTab.GALLERY
+                                val showPersonSortOptions = activeTab == ActiveTab.PERSONS && selectedPerson == null
                                 SortDialog(
                                     viewModel = viewModel,
                                     showFolderSort = showFolderSort,
                                     showMediaSort = showMediaSort,
                                     showFolderSortOptions = showFolderSortOptions,
+                                    showPersonSortOptions = showPersonSortOptions,
                                     folderSortTitle = folderSortTitle,
                                     onDismiss = { showSortDialog = false }
                                 )
@@ -2485,6 +2487,7 @@ fun SortDialog(
     showFolderSort: Boolean = true,
     showMediaSort: Boolean = true,
     showFolderSortOptions: Boolean = true,
+    showPersonSortOptions: Boolean = false,
     folderSortTitle: String = "Sort folders by",
     onDismiss: () -> Unit
 ) {
@@ -2507,10 +2510,20 @@ fun SortDialog(
                 Spacer(modifier = Modifier.height(16.dp))
                 
                 if (showFolderSort) {
-                    if (!showFolderSortOptions) {
+                    if (showPersonSortOptions) {
+                        if (folderSortBy != "name" && folderSortBy != "count") {
+                            folderSortBy = "name"
+                        }
+                    } else if (!showFolderSortOptions) {
                         folderSortBy = "name"
                     }
                     Text(folderSortTitle, style = MaterialTheme.typography.labelMedium)
+                    if (showPersonSortOptions) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(selected = folderSortBy == "name", onClick = { folderSortBy = "name" }, label = { Text("Name") })
+                            FilterChip(selected = folderSortBy == "count", onClick = { folderSortBy = "count"; folderSortDir = "desc" }, label = { Text("Photos") })
+                        }
+                    }
                     if (showFolderSortOptions) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             FilterChip(selected = folderSortBy == "name", onClick = { folderSortBy = "name" }, label = { Text("Name") })
@@ -2518,7 +2531,12 @@ fun SortDialog(
                             FilterChip(selected = folderSortBy == "random", onClick = { folderSortBy = "random" }, label = { Text("Random") })
                         }
                     }
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (showPersonSortOptions && folderSortBy == "count") {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(selected = folderSortDir == "desc", onClick = { folderSortDir = "desc" }, label = { Text("Most first") })
+                            FilterChip(selected = folderSortDir == "asc", onClick = { folderSortDir = "asc" }, label = { Text("Fewest first") })
+                        }
+                    } else Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(selected = folderSortDir == "asc", onClick = { folderSortDir = "asc" }, label = { if (showFolderSortOptions) Text("Ascending") else Text("A - Z") })
                         FilterChip(selected = folderSortDir == "desc", onClick = { folderSortDir = "desc" }, label = { if (showFolderSortOptions) Text("Descending") else Text("Z - A") })
                     }
