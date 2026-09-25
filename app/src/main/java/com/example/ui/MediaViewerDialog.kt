@@ -271,7 +271,9 @@ fun MediaViewerDialog(
     var videoCurrentPosition by remember(currentMedia) { mutableStateOf(0) }
     var isDraggingVideoSlider by remember(currentMedia) { mutableStateOf(false) }
     var videoSliderValue by remember(currentMedia) { mutableStateOf(0f) }
-    var activeVideoView by remember(currentMedia) { mutableStateOf<VideoView?>(null) }
+    // Videos are prepared ahead of time by the pager, so track them per page
+    val preparedVideoViews = remember { mutableStateMapOf<Int, VideoView>() }
+    val activeVideoView = preparedVideoViews[pagerState.currentPage]
 
     LaunchedEffect(isVideoPlaying, activeVideoView) {
         val vv = activeVideoView
@@ -563,6 +565,9 @@ fun MediaViewerDialog(
                         modifier = Modifier.fillMaxSize()
                     ) { page ->
                         val pageMedia = mediaList[page]
+                        DisposableEffect(page) {
+                            onDispose { preparedVideoViews.remove(page) }
+                        }
                         val pageRotation = rotationMap[page] ?: 0f
                         MediaViewerItem(
                             media = pageMedia,
@@ -586,9 +591,9 @@ fun MediaViewerDialog(
                             },
                             showBars = showBars,
                             onVideoPrepared = { duration, videoView ->
+                                preparedVideoViews[page] = videoView
                                 if (page == pagerState.currentPage) {
                                     videoDuration = duration
-                                    activeVideoView = videoView
                                 }
                             }
                         )
@@ -1099,6 +1104,7 @@ fun MediaViewerItem(
                 if (w != null && h != null && w > 0f && h > 0f) w / h else null
             }
             var videoAspectRatio by remember(media) { mutableStateOf(initialAspectRatio) }
+            val shouldPlay by rememberUpdatedState(isVideoPlaying)
 
             Box(
                 modifier = Modifier.fillMaxSize(),
@@ -1139,7 +1145,8 @@ fun MediaViewerItem(
                                     videoAspectRatio = w.toFloat() / h.toFloat()
                                 }
                                 onVideoPrepared(mp.duration, this)
-                                start()
+                                // Pages preloaded off-screen must stay paused until shown
+                                if (shouldPlay) start() else seekTo(1)
                             }
                             setOnInfoListener { _, what, _ ->
                                 if (what == 701) { // MediaPlayer.MEDIA_INFO_BUFFERING_START
