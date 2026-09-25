@@ -978,7 +978,7 @@ fun AlbumsTabContent(viewModel: GalleryViewModel) {
                             
                             LazyVerticalGrid(
                                 columns = GridCells.Fixed(itemsPerRow),
-                                contentPadding = PaddingValues(16.dp),
+                                contentPadding = PaddingValues(vertical = 16.dp),
                                 verticalArrangement = Arrangement.spacedBy(spacingDp),
                                 horizontalArrangement = Arrangement.spacedBy(spacingDp),
                                 modifier = Modifier.weight(1f).fillMaxWidth()
@@ -1056,7 +1056,7 @@ fun RediscoverTabContent(viewModel: GalleryViewModel) {
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(itemsPerRow.toInt()),
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(16.dp),
+                        contentPadding = PaddingValues(vertical = 16.dp),
                         verticalArrangement = Arrangement.spacedBy(spacing.dp),
                         horizontalArrangement = Arrangement.spacedBy(spacing.dp)
                     ) {
@@ -1070,7 +1070,7 @@ fun RediscoverTabContent(viewModel: GalleryViewModel) {
                             // Header
                             item(span = { GridItemSpan(itemsPerRow.toInt()) }) {
                                 var isFocused by remember { mutableStateOf(false) }
-                                Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                                Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)) {
                                     val hasMore = mediaList.size > itemsPerRow.toInt()
                                     
                                     val focusModifier = if (isFirstYear) Modifier.focusRequester(firstItemFocusRequester) else Modifier
@@ -2096,7 +2096,7 @@ fun GalleryContentGrid(
 
     LazyVerticalGrid(
         columns = GridCells.Fixed(itemsPerRow),
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = PaddingValues(vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(spacingDp),
         horizontalArrangement = Arrangement.spacedBy(spacingDp),
         modifier = Modifier.fillMaxSize()
@@ -2215,7 +2215,7 @@ fun GalleryContentGrid(
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onBackground,
-                    modifier = Modifier.padding(start = 4.dp, top = 24.dp, bottom = 8.dp, end = 4.dp).fillMaxWidth()
+                    modifier = Modifier.padding(start = 16.dp, top = 24.dp, bottom = 8.dp, end = 16.dp).fillMaxWidth()
                 )
             }
             items(count = mediaItems.size, key = { index -> "media_${mediaItems[index].id ?: mediaItems[index].name}" }) { index -> val media = mediaItems[index]
@@ -2691,7 +2691,7 @@ fun PersonsTabContent(viewModel: GalleryViewModel) {
                             LazyVerticalGrid(
                                 columns = GridCells.Fixed(itemsPerRow),
                                 modifier = Modifier.weight(1f).fillMaxWidth(),
-                                contentPadding = PaddingValues(16.dp),
+                                contentPadding = PaddingValues(vertical = 16.dp),
                                 horizontalArrangement = Arrangement.spacedBy(spacingDp),
                                 verticalArrangement = Arrangement.spacedBy(spacingDp)
                             ) {
