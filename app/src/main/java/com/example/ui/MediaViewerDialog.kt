@@ -229,39 +229,147 @@ fun MediaViewerDialog(
     val currentMedia = mediaList.getOrNull(pagerState.currentPage) ?: media
     val mediaUrl = viewModel.getOriginalMediaUrl(currentMedia)
 
-    // Smart Directional Image Preloading (Preload Size First, then Full Original Resolution)
+    val slideshowDuration = viewModel.slideshowDuration.collectAsState().value
+    var isSlideshowPlaying by remember { mutableStateOf(false) }
+
+    // Intelligent Behavior-Analyzing Preloader
     var previousPage by remember { mutableStateOf(initialIndex) }
     var swipeDirection by remember { mutableStateOf(1) } // 1: forward, -1: backward
+    var lastSwipeTime by remember { mutableStateOf(System.currentTimeMillis()) }
+    var consecutiveDirectionCount by remember { mutableStateOf(1) }
+    val activePreloadDisposables = remember { mutableListOf<coil.request.Disposable>() }
 
-    LaunchedEffect(pagerState.currentPage, mediaList) {
+    // Clean up all pending background requests when viewer is dismissed
+    DisposableEffect(Unit) {
+        onDispose {
+            activePreloadDisposables.forEach { it.dispose() }
+            activePreloadDisposables.clear()
+        }
+    }
+
+    // 1. Gesture Tracking: As soon as user drags finger towards a page, immediately warm up that page
+    LaunchedEffect(pagerState.isScrollInProgress) {
+        if (pagerState.isScrollInProgress) {
+            val target = pagerState.targetPage
+            if (target != pagerState.currentPage && target in mediaList.indices) {
+                val targetMedia = mediaList[target]
+                if (!targetMedia.isVideo) {
+                    val imageLoader = context.imageLoader
+                    val thumbUrl = viewModel.getThumbnailUrl(targetMedia)
+                    val preloadUrl = viewModel.getPreloadMediaUrl(targetMedia)
+                    if (thumbUrl.isNotBlank()) {
+                        activePreloadDisposables.add(
+                            imageLoader.enqueue(
+                                ImageRequest.Builder(context)
+                                    .data(thumbUrl)
+                                    .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                                    .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                                    .apply { if (cookies.isNotEmpty()) addHeader("Cookie", cookies) }
+                                    .build()
+                            )
+                        )
+                    }
+                    if (!preloadUrl.isNullOrBlank()) {
+                        activePreloadDisposables.add(
+                            imageLoader.enqueue(
+                                ImageRequest.Builder(context)
+                                    .data(preloadUrl)
+                                    .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                                    .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                                    .apply { if (cookies.isNotEmpty()) addHeader("Cookie", cookies) }
+                                    .build()
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Behavioral Navigation Analysis & Tiered Pipeline
+    LaunchedEffect(pagerState.currentPage, mediaList, isSlideshowPlaying) {
+        val now = System.currentTimeMillis()
+        val timeSinceLastSwipe = now - lastSwipeTime
+        lastSwipeTime = now
+
         val page = pagerState.currentPage
         if (page > previousPage) {
-            swipeDirection = 1
+            if (swipeDirection == 1) {
+                consecutiveDirectionCount++
+            } else {
+                swipeDirection = 1
+                consecutiveDirectionCount = 1
+            }
         } else if (page < previousPage) {
-            swipeDirection = -1
+            if (swipeDirection == -1) {
+                consecutiveDirectionCount++
+            } else {
+                swipeDirection = -1
+                consecutiveDirectionCount = 1
+            }
         }
         previousPage = page
+
+        // CANCEL OBSOLETE REQUESTS:
+        // Abort previous background downloads that are no longer in the path to free OkHttp sockets
+        activePreloadDisposables.forEach { it.dispose() }
+        activePreloadDisposables.clear()
 
         if (currentMedia.isVideo) {
             return@LaunchedEffect
         }
 
-        val offsets = if (swipeDirection >= 0) {
-            listOf(1, 2, 3, -1, 4, -2)
-        } else {
-            listOf(-1, -2, -3, 1, -4, 2)
-        }
-
-        val targetMediaItems = offsets.mapNotNull { offset ->
-            val index = page + offset
-            mediaList.getOrNull(index)
-        }.filter { !it.isVideo }
-
+        val isFastSkimming = timeSinceLastSwipe < 450L && !isSlideshowPlaying
         val imageLoader = context.imageLoader
 
-        // PASS 1: Preload preview display size FIRST for instant rendering
-        for (targetMedia in targetMediaItems) {
-            val preloadUrl = viewModel.getPreloadMediaUrl(targetMedia) ?: viewModel.getThumbnailUrl(targetMedia)
+        // Determine next targets based on user momentum & direction
+        val primaryDir = if (isSlideshowPlaying) 1 else swipeDirection
+        val secondaryDir = -primaryDir
+
+        val targetIndices = when {
+            consecutiveDirectionCount >= 2 -> listOf(
+                page + primaryDir,
+                page + (primaryDir * 2),
+                page + secondaryDir,
+                page + (primaryDir * 3)
+            )
+            else -> listOf(
+                page + primaryDir,
+                page + secondaryDir,
+                page + (primaryDir * 2)
+            )
+        }
+
+        val targetItems = targetIndices.mapNotNull { idx ->
+            if (idx in mediaList.indices) mediaList[idx] else null
+        }.filter { !it.isVideo }
+
+        // TIER 1: THUMBNAILS (Always loaded first, 10-25KB, guaranteed 0ms black screen)
+        for (targetMedia in targetItems) {
+            val thumbUrl = viewModel.getThumbnailUrl(targetMedia)
+            if (thumbUrl.isNotBlank()) {
+                val req = ImageRequest.Builder(context)
+                    .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .networkCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .data(thumbUrl)
+                    .apply {
+                        if (cookies.isNotEmpty()) addHeader("Cookie", cookies)
+                    }
+                    .build()
+                activePreloadDisposables.add(imageLoader.enqueue(req))
+            }
+        }
+
+        // Fast-skimming filter: If user is flicking quickly through pictures, do NOT choke network with 720p/HD
+        if (isFastSkimming) {
+            return@LaunchedEffect
+        }
+
+        // TIER 2: 720p PRELOAD PREVIEWS (for the immediate next 1-2 images in swipe direction)
+        val previewTargets = targetItems.take(if (consecutiveDirectionCount >= 2) 2 else 1)
+        for (targetMedia in previewTargets) {
+            val preloadUrl = viewModel.getPreloadMediaUrl(targetMedia)
             if (!preloadUrl.isNullOrBlank()) {
                 val req = ImageRequest.Builder(context)
                     .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
@@ -272,26 +380,34 @@ fun MediaViewerDialog(
                         if (cookies.isNotEmpty()) addHeader("Cookie", cookies)
                     }
                     .build()
-                imageLoader.enqueue(req)
+                activePreloadDisposables.add(imageLoader.enqueue(req))
             }
         }
 
-        // PASS 2: Preload full resolution original images (downsampled safely for high-res images)
-        for (targetMedia in targetMediaItems) {
-            val originalUrl = viewModel.getOriginalMediaUrl(targetMedia)
-            if (originalUrl.isNotBlank()) {
-                val req = ImageRequest.Builder(context)
-                    .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
-                    .diskCachePolicy(coil.request.CachePolicy.ENABLED)
-                    .networkCachePolicy(coil.request.CachePolicy.ENABLED)
-                    .data(originalUrl)
-                    .size(safeMaxDimension, safeMaxDimension)
-                    .precision(coil.size.Precision.INEXACT)
-                    .apply {
-                        if (cookies.isNotEmpty()) addHeader("Cookie", cookies)
-                    }
-                    .build()
-                imageLoader.enqueue(req)
+        // TIER 3: PREDICTIVE ORIGINAL RESOLUTION
+        // Only if the user pauses on the current photo for >1.2s (or in slideshow mode),
+        // preload the full original image for the single next photo (+1)
+        if (!isTv) {
+            val waitTimeMs = if (isSlideshowPlaying) 500L else 1200L
+            kotlinx.coroutines.delay(waitTimeMs)
+
+            val nextMedia = mediaList.getOrNull(page + primaryDir)
+            if (nextMedia != null && !nextMedia.isVideo) {
+                val origUrl = viewModel.getOriginalMediaUrl(nextMedia)
+                if (origUrl.isNotBlank()) {
+                    val req = ImageRequest.Builder(context)
+                        .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .networkCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .data(origUrl)
+                        .size(safeMaxDimension, safeMaxDimension)
+                        .precision(coil.size.Precision.INEXACT)
+                        .apply {
+                            if (cookies.isNotEmpty()) addHeader("Cookie", cookies)
+                        }
+                        .build()
+                    activePreloadDisposables.add(imageLoader.enqueue(req))
+                }
             }
         }
     }
@@ -338,9 +454,6 @@ fun MediaViewerDialog(
         }
     }
     var showMoreMenu by remember { mutableStateOf(false) }
-    
-    val slideshowDuration = viewModel.slideshowDuration.collectAsState().value
-    var isSlideshowPlaying by remember { mutableStateOf(false) }
     
     var interactionCount by remember { mutableStateOf(0) }
     var topBarFocused by remember { mutableStateOf(false) }
@@ -594,6 +707,10 @@ fun MediaViewerDialog(
                     HorizontalPager(
                         state = pagerState,
                         beyondViewportPageCount = 1,
+                        key = { page ->
+                            val m = mediaList.getOrNull(page)
+                            if (m != null) "${m.id ?: m.name}_${m.parentPath ?: ""}_$page" else page
+                        },
                         modifier = Modifier.fillMaxSize()
                     ) { page ->
                         val pageMedia = mediaList.getOrNull(page) ?: return@HorizontalPager
@@ -1148,9 +1265,9 @@ fun MediaViewerItem(
     val mediaUrl = viewModel.getOriginalMediaUrl(media)
 
     // Pinch to Zoom states (for images)
-    var scale by remember { mutableStateOf(1f) }
-    var offsetX by remember { mutableStateOf(0f) }
-    var offsetY by remember { mutableStateOf(0f) }
+    var scale by remember(media.id) { mutableStateOf(1f) }
+    var offsetX by remember(media.id) { mutableStateOf(0f) }
+    var offsetY by remember(media.id) { mutableStateOf(0f) }
 
     Box(
         modifier = Modifier.fillMaxSize(),
@@ -1277,6 +1394,9 @@ fun MediaViewerItem(
                 exoPlayer.addListener(listener)
                 onDispose {
                     exoPlayer.removeListener(listener)
+                    exoPlayer.stop()
+                    exoPlayer.release()
+                    onDisposeVideo?.invoke()
                 }
             }
 
@@ -1289,14 +1409,6 @@ fun MediaViewerItem(
                 } else {
                     exoPlayer.playWhenReady = false
                     exoPlayer.pause()
-                }
-            }
-
-            DisposableEffect(media.id) {
-                onDispose {
-                    exoPlayer.stop()
-                    exoPlayer.release()
-                    onDisposeVideo?.invoke()
                 }
             }
 
@@ -1369,61 +1481,98 @@ fun MediaViewerItem(
             val preloadUrl = viewModel.getPreloadMediaUrl(media)
             val thumbnailUrl = viewModel.getThumbnailUrl(media)
 
-            var currentUrl by remember(media) {
-                mutableStateOf(preloadUrl ?: originalUrl)
-            }
-
-            var preloadDrawable by remember(media) {
-                mutableStateOf<android.graphics.drawable.Drawable?>(null)
-            }
+            var isThumbnailLoaded by remember(media.id) { mutableStateOf(false) }
+            var isPreloadLoaded by remember(media.id) { mutableStateOf(false) }
+            var isFullImageLoaded by remember(media.id) { mutableStateOf(false) }
+            var shouldLoadFullImage by remember(media.id) { mutableStateOf(false) }
 
             val displayMetrics = LocalContext.current.resources.displayMetrics
             val maxScreenDim = maxOf(displayMetrics.widthPixels, displayMetrics.heightPixels)
-            val safeMaxDimension = minOf(maxScreenDim * 2, 4096).coerceAtLeast(1920)
+            val safeMaxDimension = minOf(maxScreenDim * 2, 3840).coerceAtLeast(1920)
 
-            // Image View with Pinch to Zoom & dynamic Client-Side Rotation
-            val builder = ImageRequest.Builder(context)
-                .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
-                .diskCachePolicy(coil.request.CachePolicy.ENABLED)
-                .networkCachePolicy(coil.request.CachePolicy.ENABLED)
-                .data(currentUrl)
-                .crossfade(true)
+            // Step 1: Minimum thumbnail request (always loaded as baseline, instant from disk cache or small network fetch)
+            val thumbnailRequest = remember(thumbnailUrl, cookies) {
+                ImageRequest.Builder(context)
+                    .data(thumbnailUrl)
+                    .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .networkCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .apply {
+                        if (cookies.isNotEmpty()) addHeader("Cookie", cookies)
+                    }
+                    .build()
+            }
 
-            if (currentUrl == originalUrl) {
-                builder.size(safeMaxDimension, safeMaxDimension)
-                builder.precision(coil.size.Precision.INEXACT)
-                if (preloadDrawable != null) {
-                    builder.placeholder(preloadDrawable)
+            // Step 2: Preload image request (loaded on top of thumbnail)
+            val preloadRequest = remember(preloadUrl, cookies) {
+                if (!preloadUrl.isNullOrBlank() && preloadUrl != thumbnailUrl) {
+                    ImageRequest.Builder(context)
+                        .data(preloadUrl)
+                        .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .networkCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .crossfade(150)
+                        .apply {
+                            if (cookies.isNotEmpty()) addHeader("Cookie", cookies)
+                        }
+                        .build()
+                } else null
+            }
+
+            // Progressive stage trigger:
+            // 1. Minimum thumbnail always loads immediately.
+            // 2. Preload loads immediately.
+            // 3. Full image triggers when this page is the current active page,
+            //    after preload has loaded (or timeout), or if user zooms.
+            LaunchedEffect(isCurrentPage, isPreloadLoaded, scale) {
+                if (isCurrentPage) {
+                    if (scale > 1f || preloadRequest == null) {
+                        shouldLoadFullImage = true
+                    } else if (isPreloadLoaded) {
+                        shouldLoadFullImage = true
+                    } else {
+                        // Short grace period to give preload a chance to display instantly first
+                        kotlinx.coroutines.delay(800)
+                        shouldLoadFullImage = true
+                    }
                 } else {
-                    builder.placeholderMemoryCacheKey(preloadUrl ?: thumbnailUrl)
+                    // Swiped away: cancel heavy full image to free up memory and network
+                    shouldLoadFullImage = false
+                    isFullImageLoaded = false
+                    scale = 1f
+                    offsetX = 0f
+                    offsetY = 0f
                 }
-            } else {
-                builder.placeholderMemoryCacheKey(thumbnailUrl)
             }
 
-            if (cookies.isNotEmpty()) {
-                builder.addHeader("Cookie", cookies)
+            // Step 3: Full image request
+            val fullImageRequest = remember(originalUrl, cookies, safeMaxDimension) {
+                ImageRequest.Builder(context)
+                    .data(originalUrl)
+                    .size(safeMaxDimension, safeMaxDimension)
+                    .precision(coil.size.Precision.INEXACT)
+                    .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .networkCachePolicy(coil.request.CachePolicy.ENABLED)
+                    .crossfade(150)
+                    .apply {
+                        if (cookies.isNotEmpty()) addHeader("Cookie", cookies)
+                    }
+                    .build()
             }
-            val imageRequest = builder.build()
-            
-            var intrinsicSize by remember { mutableStateOf(Size.Zero) }
 
-            AsyncImage(
-                model = imageRequest,
-                contentDescription = media.name,
-                contentScale = ContentScale.Fit,
-                onSuccess = { state ->
-                    intrinsicSize = state.painter.intrinsicSize
-                    preloadDrawable = state.result.drawable
-                    if (currentUrl == preloadUrl && !isTv) {
-                        currentUrl = originalUrl
-                    }
-                },
-                onError = {
-                    if (currentUrl == preloadUrl && !isTv) {
-                        currentUrl = originalUrl
-                    }
-                },
+            val initialIntrinsicSize = remember(media) {
+                val w = media.metadata?.size?.width?.toFloat()
+                val h = media.metadata?.size?.height?.toFloat()
+                if (w != null && h != null && w > 0f && h > 0f) {
+                    Size(w, h)
+                } else {
+                    Size.Zero
+                }
+            }
+            var intrinsicSize by remember(media.id) { mutableStateOf(initialIntrinsicSize) }
+
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .pointerInput(Unit) {
@@ -1435,6 +1584,7 @@ fun MediaViewerItem(
                                     offsetY = 0f
                                 } else {
                                     scale = 2.5f
+                                    shouldLoadFullImage = true
                                 }
                             },
                             onTap = { onToggleBars() }
@@ -1453,23 +1603,26 @@ fun MediaViewerItem(
                                     if (pointersCount > 1 || scale > 1f) {
                                         val nextScale = (scale * zoomChange).coerceIn(1f, 5f)
                                         scale = nextScale
-                                        
+                                        if (nextScale > 1f) {
+                                            shouldLoadFullImage = true
+                                        }
+
                                         var consumedPan = false
-                                        
+
                                         if (nextScale > 1f && intrinsicSize.width > 0f && intrinsicSize.height > 0f) {
                                             val scaleX = size.width / intrinsicSize.width
                                             val scaleY = size.height / intrinsicSize.height
                                             val fitScale = minOf(scaleX, scaleY)
                                             val displayWidth = intrinsicSize.width * fitScale
                                             val displayHeight = intrinsicSize.height * fitScale
-                                            
+
                                             val maxOffsetX = maxOf(0f, (displayWidth * nextScale - size.width) / 2f)
                                             val maxOffsetY = maxOf(0f, (displayHeight * nextScale - size.height) / 2f)
-                                            
+
                                             val oldOffsetX = offsetX
                                             offsetX = (offsetX + panChange.x * nextScale).coerceIn(-maxOffsetX, maxOffsetX)
                                             offsetY = (offsetY + panChange.y * nextScale).coerceIn(-maxOffsetY, maxOffsetY)
-                                            
+
                                             val movedX = kotlin.math.abs(offsetX - oldOffsetX) > 0.01f
                                             val isZooming = pointersCount > 1 || zoomChange != 1f
                                             if (movedX || isZooming) {
@@ -1479,7 +1632,7 @@ fun MediaViewerItem(
                                             offsetX = 0f
                                             offsetY = 0f
                                         }
-                                        
+
                                         if (consumedPan) {
                                             event.changes.forEach {
                                                 if (it.positionChanged()) {
@@ -1510,15 +1663,15 @@ fun MediaViewerItem(
                         drawContent()
                         val metaW = media.metadata?.size?.width?.toFloat() ?: intrinsicSize.width
                         val metaH = media.metadata?.size?.height?.toFloat() ?: intrinsicSize.height
-                        
+
                         if (showFaceRegions && intrinsicSize.width > 0f && intrinsicSize.height > 0f && metaW > 0f && metaH > 0f) {
                             val scaleX = size.width / intrinsicSize.width
                             val scaleY = size.height / intrinsicSize.height
                             val fitScale = minOf(scaleX, scaleY)
-                            
+
                             val drawWidth = intrinsicSize.width * fitScale
                             val drawHeight = intrinsicSize.height * fitScale
-                            
+
                             val leftOffset = (size.width - drawWidth) / 2f
                             val topOffset = (size.height - drawHeight) / 2f
 
@@ -1528,12 +1681,12 @@ fun MediaViewerItem(
                                     val rTop = box.top.toFloat() / metaH
                                     val rWidth = box.width.toFloat() / metaW
                                     val rHeight = box.height.toFloat() / metaH
-                                    
+
                                     val boxLeft = leftOffset + rLeft * drawWidth
                                     val boxTop = topOffset + rTop * drawHeight
                                     val boxW = rWidth * drawWidth
                                     val boxH = rHeight * drawHeight
-                                    
+
                                     // Draw face box (PiGallery2 style: white border, 2px, 5px radius)
                                     drawRoundRect(
                                         color = Color.White,
@@ -1542,7 +1695,7 @@ fun MediaViewerItem(
                                         cornerRadius = androidx.compose.ui.geometry.CornerRadius(5.dp.toPx()),
                                         style = Stroke(width = 2.dp.toPx())
                                     )
-                                    
+
                                     // Draw face name (PiGallery2 style: white text, transparent dark background)
                                     if (face.name != null) {
                                         val paint = android.graphics.Paint().apply {
@@ -1552,17 +1705,17 @@ fun MediaViewerItem(
                                             isFakeBoldText = true
                                             textAlign = android.graphics.Paint.Align.CENTER
                                         }
-                                        
+
                                         val textWidth = paint.measureText(face.name)
                                         val textHeight = paint.descent() - paint.ascent()
-                                        
+
                                         val textCenterX = boxLeft + boxW / 2f
                                         val textTop = boxTop + boxH + 4.dp.toPx() // Below the box
                                         val bgLeft = textCenterX - textWidth / 2f - 4.dp.toPx()
                                         val bgRight = textCenterX + textWidth / 2f + 4.dp.toPx()
                                         val bgTop = textTop
                                         val bgBottom = textTop + textHeight + 8.dp.toPx()
-                                        
+
                                         // Background
                                         drawRoundRect(
                                             color = Color(0x80000000), // rgba(0,0,0,0.2)
@@ -1570,7 +1723,7 @@ fun MediaViewerItem(
                                             size = Size(bgRight - bgLeft, bgBottom - bgTop),
                                             cornerRadius = androidx.compose.ui.geometry.CornerRadius(5.dp.toPx())
                                         )
-                                        
+
                                         drawContext.canvas.nativeCanvas.drawText(
                                             face.name,
                                             textCenterX,
@@ -1581,8 +1734,65 @@ fun MediaViewerItem(
                                 }
                             }
                         }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                // 1. Minimum Thumbnail: always rendered as solid base layer (fastest to load or already in disk cache)
+                AsyncImage(
+                    model = thumbnailRequest,
+                    contentDescription = media.name,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize(),
+                    onSuccess = { state ->
+                        isThumbnailLoaded = true
+                        if (intrinsicSize == Size.Zero) {
+                            intrinsicSize = state.painter.intrinsicSize
+                        }
                     }
-            )
+                )
+
+                // 2. Preload Image: rendered on top of thumbnail once loaded
+                if (preloadRequest != null) {
+                    AsyncImage(
+                        model = preloadRequest,
+                        contentDescription = media.name,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize(),
+                        onSuccess = { state ->
+                            isPreloadLoaded = true
+                            intrinsicSize = state.painter.intrinsicSize
+                        },
+                        onError = {
+                            if (isCurrentPage) {
+                                shouldLoadFullImage = true
+                            }
+                        }
+                    )
+                }
+
+                // 3. Full Image: rendered on top of preload/thumbnail once loaded
+                if (shouldLoadFullImage && !isTv) {
+                    AsyncImage(
+                        model = fullImageRequest,
+                        contentDescription = media.name,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize(),
+                        onSuccess = { state ->
+                            isFullImageLoaded = true
+                            intrinsicSize = state.painter.intrinsicSize
+                        }
+                    )
+                }
+
+                // Initial loading indicator before thumbnail arrives
+                if (!isThumbnailLoaded && !isPreloadLoaded && !isFullImageLoaded) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(36.dp),
+                        color = Color.White.copy(alpha = 0.6f),
+                        strokeWidth = 3.dp
+                    )
+                }
+            }
         }
     }
 }

@@ -12,7 +12,10 @@ object DatabaseProvider {
                 context.applicationContext,
                 AppDatabase::class.java,
                 "pigallery_database"
-            ).fallbackToDestructiveMigration().build()
+            )
+            .fallbackToDestructiveMigration()
+            .fallbackToDestructiveMigrationOnDowngrade()
+            .build()
             INSTANCE = instance
             instance
         }

@@ -7,7 +7,7 @@ import java.util.TimeZone
 
 object DateUtils {
     fun formatMediaDate(timestamp: Long?, offset: String?, formatString: String = "dd.MM.yyyy HH:mm:ss"): String {
-        if (timestamp == null) return "Unbekannt"
+        if (timestamp == null || timestamp <= 0L) return "Unbekannt"
         val ms = if (timestamp < 10000000000L) timestamp * 1000L else timestamp
         return try {
             val sdf = SimpleDateFormat(formatString, Locale.getDefault())
@@ -26,7 +26,7 @@ object DateUtils {
     }
 
     fun getLocalTimeMs(timestamp: Long?, offset: String?): Long {
-        if (timestamp == null) return 0L
+        if (timestamp == null || timestamp <= 0L) return 0L
         val ms = if (timestamp < 10000000000L) timestamp * 1000L else timestamp
         if (offset.isNullOrEmpty()) return ms
 

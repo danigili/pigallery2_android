@@ -119,8 +119,33 @@ fun AdaptivePullToRefreshBox(
             isRefreshing = isRefreshing,
             onRefresh = onRefresh,
             modifier = modifier,
-            content = content
-        )
+            indicator = {}, // Eliminates the upper area indicator completely
+        ) {
+            content()
+
+            // Keep only the loading indicator in the center during refresh
+            if (isRefreshing) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.92f),
+                        shadowElevation = 6.dp,
+                        tonalElevation = 6.dp
+                    ) {
+                        Box(modifier = Modifier.padding(14.dp)) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(32.dp),
+                                strokeWidth = 3.dp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -710,7 +735,7 @@ fun GalleryTabContent(viewModel: GalleryViewModel) {
 
             HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
 
-            val isRefreshing = galleryState is GalleryUiState.Loading
+            val isRefreshing by viewModel.isRefreshing.collectAsState()
             AdaptivePullToRefreshBox(
                 isRefreshing = isRefreshing,
                 onRefresh = { viewModel.refreshCurrentDirectory() },
@@ -730,8 +755,14 @@ fun GalleryTabContent(viewModel: GalleryViewModel) {
                     is GalleryUiState.Success -> {
                         val directory = state.directory
                         val rawSubfolders = directory.directories ?: emptyList()
-                        val subfolders = remember(rawSubfolders) {
-                            rawSubfolders.filter { (it.mediaCount ?: 0) > 0 }
+                        val subfolders = remember(rawSubfolders, galleryViewMode) {
+                            rawSubfolders.filter {
+                                if (galleryViewMode == GalleryViewMode.DATE) {
+                                    (it.mediaCount ?: 0) > 0
+                                } else {
+                                    it.mediaCount == null || it.mediaCount > 0
+                                }
+                            }
                         }
                         val mediaList = directory.media ?: emptyList()
 
@@ -922,10 +953,10 @@ fun AlbumsTabContent(viewModel: GalleryViewModel) {
     if (selectedAlbum != null) {
         // Render current album's content
         Column(modifier = Modifier.fillMaxSize()) {
-            val isRefreshing = albumContentState is GalleryUiState.Loading
+            val isRefreshing by viewModel.isAlbumContentRefreshing.collectAsState()
             AdaptivePullToRefreshBox(
                 isRefreshing = isRefreshing,
-                onRefresh = { selectedAlbum?.let { viewModel.selectAlbum(it) } },
+                onRefresh = { selectedAlbum?.let { viewModel.refreshAlbumContent(it) } },
                 modifier = Modifier.weight(1f).fillMaxWidth()
             ) {
                 when (val state = albumContentState) {
@@ -961,10 +992,10 @@ fun AlbumsTabContent(viewModel: GalleryViewModel) {
         }
     } else {
         // Render Album list
-        val isRefreshing = albumsState is AlbumsUiState.Loading
+        val isRefreshing by viewModel.isAlbumsRefreshing.collectAsState()
         AdaptivePullToRefreshBox(
             isRefreshing = isRefreshing,
-            onRefresh = { viewModel.loadAlbums() },
+            onRefresh = { viewModel.refreshAlbums() },
             modifier = Modifier.fillMaxSize()
         ) {
             when (val state = albumsState) {
@@ -1807,7 +1838,7 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
 
                             val (activeText, activeColor, activeIcon) = when (netInfo.activeRoute) {
                                 com.example.ui.ActiveRouteType.LOCAL_WIFI -> Triple(
-                                    "Local Wi-Fi Active",
+                                    "Local Server Active",
                                     Color(0xFF4CAF50),
                                     Icons.Default.Wifi
                                 )
@@ -2298,11 +2329,7 @@ fun GalleryContentGrid(
         val grouped = LinkedHashMap<String, MutableList<ApiMedia>>()
         for (media in mediaList) {
             val key = DateUtils.formatMediaDate(media.metadata?.creationDate, media.metadata?.creationDateOffset, "MMMM yyyy")
-            if (grouped.containsKey(key)) {
-                grouped[key]!!.add(media)
-            } else {
-                grouped[key] = mutableListOf(media)
-            }
+            grouped.getOrPut(key) { mutableListOf() }.add(media)
         }
         grouped
     }
@@ -2330,7 +2357,7 @@ fun GalleryContentGrid(
         modifier = Modifier.fillMaxSize()
     ) {
         // Render Subfolders
-        items(count = subfolders.size, key = { index -> "folder_${subfolders[index].path}" }) { index -> val folder = subfolders[index]
+        items(count = subfolders.size, key = { index -> "folder_${subfolders[index].path}_$index" }) { index -> val folder = subfolders[index]
             val coverUrl = viewModel.getFolderCoverUrl(folder)
             
             val focusModifier = if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier
@@ -2449,7 +2476,7 @@ fun GalleryContentGrid(
                     modifier = Modifier.padding(start = 4.dp, top = 24.dp, bottom = 8.dp, end = 4.dp).fillMaxWidth()
                 )
             }
-            items(count = mediaItems.size, key = { index -> "media_${mediaItems[index].id ?: mediaItems[index].name}" }) { index -> val media = mediaItems[index]
+            items(count = mediaItems.size, key = { index -> "media_${mediaItems[index].id ?: "none"}_${mediaItems[index].parentPath ?: ""}_${mediaItems[index].name}_$index" }) { index -> val media = mediaItems[index]
             val isSelected = selectedMediaForShare.contains(media)
 
             val isFirstOverallMedia = !hasSubfolders && monthYear == groupedMedia.keys.first() && index == 0
@@ -2611,15 +2638,14 @@ fun BreadcrumbBar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        itemsIndexed(pathHistory) { index, path ->
+        itemsIndexed(pathHistory, key = { index, path -> "bc_${index}_$path" }) { index, path ->
             val folderName = if (galleryViewMode == GalleryViewMode.DATE) {
                 when {
                     index == 0 -> "Datum"
                     path.startsWith("year:") && !path.contains("month:") -> path.substringAfter("year:")
                     path.contains("month:") -> {
                         val monthNum = path.substringAfter("month:").toIntOrNull() ?: 1
-                        val vm = androidx.lifecycle.viewmodel.compose.viewModel<GalleryViewModel>() // or pass method
-                        // We can parse month name directly or use static/helper
+                        // Parse month name directly
                         when (monthNum) {
                             1 -> "Januar"
                             2 -> "Februar"
@@ -2876,10 +2902,10 @@ fun PersonsTabContent(viewModel: GalleryViewModel) {
 
     if (selectedPerson != null) {
         // Render current person's content
-        val isRefreshing = personContentState is GalleryUiState.Loading
+        val isRefreshing by viewModel.isPersonContentRefreshing.collectAsState()
         AdaptivePullToRefreshBox(
             isRefreshing = isRefreshing,
-            onRefresh = { selectedPerson?.let { viewModel.selectPerson(it) } },
+            onRefresh = { selectedPerson?.let { viewModel.refreshPersonContent(it) } },
             modifier = Modifier.fillMaxSize()
         ) {
                 when (val state = personContentState) {
@@ -2914,10 +2940,10 @@ fun PersonsTabContent(viewModel: GalleryViewModel) {
             }
     } else {
         // Render persons list
-        val isRefreshing = personsState is PersonsUiState.Loading
+        val isRefreshing by viewModel.isPersonsRefreshing.collectAsState()
         AdaptivePullToRefreshBox(
             isRefreshing = isRefreshing,
-            onRefresh = { viewModel.loadPersons() },
+            onRefresh = { viewModel.refreshPersons() },
             modifier = Modifier.fillMaxSize()
         ) {
             when (val state = personsState) {

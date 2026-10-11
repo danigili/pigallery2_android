@@ -289,44 +289,49 @@ class PiGalleryApi(private val context: android.content.Context) {
     }
 
     private val prefs = PreferencesManager(context)
-    val client: OkHttpClient
+    var client: OkHttpClient
 
     init {
+        client = buildHttpClient(prefs.allowInsecureSsl)
+    }
+
+    private fun buildHttpClient(allowInsecure: Boolean): OkHttpClient {
         val builder = OkHttpClient.Builder()
-            .cache(Cache(File(context.cacheDir, "http_cache"), 50L * 1024L * 1024L)) // 50MB
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             
         try {
-            val trustAllCerts = arrayOf<TrustManager>(
-                object : X509TrustManager {
-                    override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-                    override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
-                        if (!prefs.allowInsecureSsl) {
-                            val defaultTrustManagerFactory = javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm())
-                            defaultTrustManagerFactory.init(null as java.security.KeyStore?)
-                            val defaultTrustManager = defaultTrustManagerFactory.trustManagers[0] as X509TrustManager
-                            defaultTrustManager.checkServerTrusted(chain, authType)
-                        }
-                    }
-                    override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-                }
-            )
-            val sslContext = SSLContext.getInstance("SSL")
-            sslContext.init(null, trustAllCerts, java.security.SecureRandom())
-            builder.sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
-            builder.hostnameVerifier { hostname, session -> 
-                if (prefs.allowInsecureSsl) true else javax.net.ssl.HttpsURLConnection.getDefaultHostnameVerifier().verify(hostname, session)
+            val cacheDir = context.cacheDir
+            if (cacheDir != null) {
+                builder.cache(Cache(File(cacheDir, "http_cache"), 50L * 1024L * 1024L)) // 50MB
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            // Ignore cache error
+        }
+            
+        if (allowInsecure) {
+            try {
+                val trustAllCerts = arrayOf<TrustManager>(
+                    object : X509TrustManager {
+                        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+                        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+                        override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+                    }
+                )
+                val sslContext = SSLContext.getInstance("TLS")
+                sslContext.init(null, trustAllCerts, java.security.SecureRandom())
+                builder.sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
+                builder.hostnameVerifier { _, _ -> true }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
         
-        client = builder.build()
+        return builder.build()
     }
 
     fun updateClientSsl(allowInsecure: Boolean) {
-        // Now handled dynamically via prefs inside the TrustManager
+        client = buildHttpClient(allowInsecure)
     }
         
     fun clearCache() {
@@ -505,19 +510,18 @@ class PiGalleryApi(private val context: android.content.Context) {
         val request = builder.build()
 
         client.newCall(request).execute().use { response ->
-            val bodyString = response.body?.string() ?: throw IOException("Empty response from gallery content endpoint")
-            
             if (!response.isSuccessful) {
                 if (response.code == 401) {
                     throw IOException("Unauthorized. Session might have expired.")
                 }
                 throw IOException("Server returned error code: ${response.code}")
             }
+            val source = response.body?.source() ?: throw IOException("Empty response from gallery content endpoint")
 
             val mapType = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
             val mapAdapter = moshi.adapter<Map<String, Any?>>(mapType)
             val responseMap = try {
-                mapAdapter.fromJson(bodyString)
+                mapAdapter.fromJson(source)
             } catch (e: Exception) {
                 throw IOException("Failed to parse server response as JSON: ${e.message}")
             }
@@ -616,16 +620,15 @@ class PiGalleryApi(private val context: android.content.Context) {
         val request = builder.build()
 
         client.newCall(request).execute().use { response ->
-            val bodyString = response.body?.string() ?: throw IOException("Empty response from search endpoint")
-            
             if (!response.isSuccessful) {
                 throw IOException("Server returned error code: ${response.code}")
             }
+            val source = response.body?.source() ?: throw IOException("Empty response from search endpoint")
 
             val mapType = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
             val mapAdapter = moshi.adapter<Map<String, Any?>>(mapType)
             val responseMap = try {
-                mapAdapter.fromJson(bodyString)
+                mapAdapter.fromJson(source)
             } catch (e: Exception) {
                 throw IOException("Failed to parse server response as JSON: ${e.message}")
             }

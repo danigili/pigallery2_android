@@ -62,7 +62,7 @@ fun FastScrollIndicator(
     var dragFraction by remember { mutableStateOf<Float?>(null) }
     var trackHeightPx by remember { mutableStateOf(1f) }
 
-    val activeFraction = if (isDragging && dragFraction != null) dragFraction!! else computedScrollFraction
+    val activeFraction = if (isDragging) (dragFraction ?: computedScrollFraction) else computedScrollFraction
 
     // Resolve current date/section label for active index
     val activeIndex = remember(activeFraction, totalItems) {

@@ -46,81 +46,89 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        val prefs = PreferencesManager(this)
-        val imageLoader = ImageLoader.Builder(this)
-            .memoryCache {
-                MemoryCache.Builder(this)
-                    .maxSizePercent(0.35) // Dedicate 35% of heap memory to LRU image memory caching
-                    .strongReferencesEnabled(true)
-                    .weakReferencesEnabled(true)
-                    .build()
-            }
-            .diskCache {
-                DiskCache.Builder()
-                    .directory(this.cacheDir.resolve("image_cache"))
-                    .maxSizeBytes(1024L * 1024L * 1024L) // 1GB disk cache
-                    .build()
-            }
-            .respectCacheHeaders(false) // Cache images aggressively even if the server returns no-cache/no-store headers
-            .okHttpClient {
-                val dispatcher = okhttp3.Dispatcher().apply {
-                    maxRequests = 128
-                    maxRequestsPerHost = 32 // Drastically increases parallel connections for smooth thumbnail loading
+        try {
+            val prefs = PreferencesManager(this)
+            val imageLoader = ImageLoader.Builder(this)
+                .memoryCache {
+                    MemoryCache.Builder(this)
+                        .maxSizePercent(0.20) // Conservative 20% of heap to prevent OOM during heavy scrolling
+                        .strongReferencesEnabled(true)
+                        .weakReferencesEnabled(true)
+                        .build()
                 }
-                val builder = OkHttpClient.Builder()
-                    .dispatcher(dispatcher)
-                    .connectionPool(okhttp3.ConnectionPool(50, 5, java.util.concurrent.TimeUnit.MINUTES))
-                
-                // We use a custom TrustManager if allowInsecureSsl is enabled
-                // But since it can change, we check it per request? No, it's easier to just use an insecure client
-                // if it's currently true. For dynamic changes, we'll just allow all if it was true at startup,
-                // or we use a wrapper.
-                
-                val trustAllCerts = arrayOf<TrustManager>(
-                    object : X509TrustManager {
-                        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-                        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
-                            if (!prefs.allowInsecureSsl) {
-                                val defaultTrustManagerFactory = javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm())
-                                defaultTrustManagerFactory.init(null as java.security.KeyStore?)
-                                val defaultTrustManager = defaultTrustManagerFactory.trustManagers[0] as X509TrustManager
-                                defaultTrustManager.checkServerTrusted(chain, authType)
-                            }
+                .diskCache {
+                    try {
+                        DiskCache.Builder()
+                            .directory(this.cacheDir.resolve("image_cache"))
+                            .maxSizeBytes(1024L * 1024L * 1024L) // 1GB disk cache
+                            .build()
+                    } catch (e: Exception) {
+                        null
+                    }
+                }
+                .allowHardware(android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) // Store bitmaps in graphic memory instead of Java heap
+                .respectCacheHeaders(false) // Cache images aggressively even if the server returns no-cache/no-store headers
+                .okHttpClient {
+                    val dispatcher = okhttp3.Dispatcher().apply {
+                        maxRequests = 24 // Balanced concurrency to avoid saturating Okio segment buffers
+                        maxRequestsPerHost = 8
+                    }
+                    val builder = OkHttpClient.Builder()
+                        .dispatcher(dispatcher)
+                        .connectionPool(okhttp3.ConnectionPool(10, 2, java.util.concurrent.TimeUnit.MINUTES))
+                        .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                        .readTimeout(25, java.util.concurrent.TimeUnit.SECONDS)
+                    
+                    if (prefs.allowInsecureSsl) {
+                        try {
+                            val trustAllCerts = arrayOf<TrustManager>(
+                                object : X509TrustManager {
+                                    override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+                                    override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+                                    override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+                                }
+                            )
+                            val sslContext = SSLContext.getInstance("TLS")
+                            sslContext.init(null, trustAllCerts, java.security.SecureRandom())
+                            builder.sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
+                            builder.hostnameVerifier { _, _ -> true }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
                         }
-                        override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
                     }
-                )
-                try {
-                    val sslContext = SSLContext.getInstance("SSL")
-                    sslContext.init(null, trustAllCerts, java.security.SecureRandom())
-                    builder.sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
-                    builder.hostnameVerifier { hostname, session -> 
-                        if (prefs.allowInsecureSsl) true else javax.net.ssl.HttpsURLConnection.getDefaultHostnameVerifier().verify(hostname, session)
-                    }
-                } catch (e: Exception) {
-                    e.printStackTrace()
+                    
+                    builder.build()
                 }
-                
-                builder.build()
-            }
-            .build()
-        Coil.setImageLoader(imageLoader)
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-            val lp = window.attributes
-            lp.layoutInDisplayCutoutMode =
-                android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-            window.attributes = lp
+                .build()
+            Coil.setImageLoader(imageLoader)
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
-        enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.auto(
-                android.graphics.Color.TRANSPARENT,
-                android.graphics.Color.TRANSPARENT
-            ),
-            navigationBarStyle = SystemBarStyle.auto(
-                android.graphics.Color.TRANSPARENT,
-                android.graphics.Color.TRANSPARENT
+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            try {
+                val lp = window.attributes
+                lp.layoutInDisplayCutoutMode =
+                    android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                window.attributes = lp
+            } catch (e: Exception) {
+                // Ignore cutout configuration failure
+            }
+        }
+        try {
+            enableEdgeToEdge(
+                statusBarStyle = SystemBarStyle.auto(
+                    android.graphics.Color.TRANSPARENT,
+                    android.graphics.Color.TRANSPARENT
+                ),
+                navigationBarStyle = SystemBarStyle.auto(
+                    android.graphics.Color.TRANSPARENT,
+                    android.graphics.Color.TRANSPARENT
+                )
             )
-        )
+        } catch (e: Exception) {
+            // Safe fallback for window configuration
+        }
         setContent {
             val viewModel: GalleryViewModel = viewModel()
             val themeColorOption by viewModel.themeColorOption.collectAsState()
@@ -139,16 +147,23 @@ class MainActivity : ComponentActivity() {
             if (!view.isInEditMode) {
                 @Suppress("DEPRECATION")
                 SideEffect {
-                    val window = view.context.findActivity()?.window ?: return@SideEffect
-                    window.statusBarColor = android.graphics.Color.TRANSPARENT
-                    window.navigationBarColor = android.graphics.Color.TRANSPARENT
-                    val insetsController = WindowCompat.getInsetsController(window, view)
-                    insetsController.isAppearanceLightStatusBars = !darkTheme
-                    insetsController.isAppearanceLightNavigationBars = !darkTheme
+                    try {
+                        val window = view.context.findActivity()?.window ?: return@SideEffect
+                        window.statusBarColor = android.graphics.Color.TRANSPARENT
+                        window.navigationBarColor = android.graphics.Color.TRANSPARENT
+                        val insetsController = WindowCompat.getInsetsController(window, view)
+                        insetsController.isAppearanceLightStatusBars = !darkTheme
+                        insetsController.isAppearanceLightNavigationBars = !darkTheme
 
-                    val layoutParams = window.attributes
-                    layoutParams.screenBrightness = if (maxBrightnessEnabled) 1.0f else WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
-                    window.attributes = layoutParams
+                        val layoutParams = window.attributes
+                        val targetBrightness = if (maxBrightnessEnabled) 1.0f else WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                        if (layoutParams.screenBrightness != targetBrightness) {
+                            layoutParams.screenBrightness = targetBrightness
+                            window.attributes = layoutParams
+                        }
+                    } catch (e: Exception) {
+                        // Prevent crash on startup if window attributes fail
+                    }
                 }
             }
 

@@ -18,13 +18,17 @@ class SearchHistoryManager(private val context: Context) {
     }
 
     val searchHistory: Flow<List<String>> = context.dataStore.data.map { preferences ->
-        val jsonStr = preferences[HISTORY_KEY] ?: "[]"
-        val array = JSONArray(jsonStr)
-        val list = mutableListOf<String>()
-        for (i in 0 until array.length()) {
-            list.add(array.getString(i))
+        try {
+            val jsonStr = preferences[HISTORY_KEY] ?: "[]"
+            val array = JSONArray(jsonStr)
+            val list = mutableListOf<String>()
+            for (i in 0 until array.length()) {
+                list.add(array.getString(i))
+            }
+            list
+        } catch (e: Exception) {
+            emptyList()
         }
-        list
     }
 
     suspend fun addSearchQuery(query: String) {
