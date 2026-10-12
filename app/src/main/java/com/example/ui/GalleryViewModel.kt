@@ -196,6 +196,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     private val directoryCache = java.util.concurrent.ConcurrentHashMap<String, ApiDirectory>()
     private val cachedFlattenedMedia = java.util.concurrent.ConcurrentHashMap<String, List<ApiMedia>>()
+    private val cachedYearMedia = java.util.concurrent.ConcurrentHashMap<Int, List<ApiMedia>>()
     private val lastBackgroundSyncTime = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val fetchSemaphore = Semaphore(4)
     private var backgroundSyncJob: kotlinx.coroutines.Job? = null
@@ -722,6 +723,39 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    suspend fun fetchMediaForYear(year: Int): List<ApiMedia> {
+        val cached = cachedYearMedia[year]
+        if (cached != null) return cached
+
+        val server = prefs.serverUrl
+        val cookies = prefs.cookies
+        val apiPrefix = prefs.apiPrefix
+        if (server.isEmpty()) return emptyList()
+
+        return try {
+            val minMs = com.example.data.search.SearchQueryParser.parse("date:$year-01-01").let { 
+                (it as? com.example.data.search.RangeSearch)?.min ?: 0L 
+            }
+            val maxMs = com.example.data.search.SearchQueryParser.parse("date:$year-12-31").let { 
+                (it as? com.example.data.search.RangeSearch)?.max ?: Long.MAX_VALUE 
+            }
+            val queryYear: Map<String, Any?> = mapOf(
+                "type" to 10, // DATE RangeSearch
+                "min" to minMs,
+                "max" to maxMs
+            )
+            val queryJson = api.serializeQuery(queryYear)
+            val result = api.search(server, queryJson, cookies, apiPrefix)
+            val mediaList = deduplicateMedia(result.media.orEmpty())
+            if (mediaList.isNotEmpty()) {
+                cachedYearMedia[year] = mediaList
+            }
+            mediaList
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
     private fun buildDateViewDirectory(currentPathStr: String, uniqueMedia: List<ApiMedia>): ApiDirectory {
         return try {
             val rootPath = prefs.defaultRootPath
@@ -857,6 +891,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun refreshCurrentDirectory() {
         directoryCache.clear()
+        cachedYearMedia.clear()
         _isRefreshing.value = true
         // Safety timeout so refresh indicator is guaranteed to dismiss within 12 seconds max
         viewModelScope.launch {
@@ -1004,6 +1039,41 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
 
                 if (isDateOrFlattened) {
+                    // Check if we are inside a specific year or month in DATE mode
+                    if (galleryViewMode.value == GalleryViewMode.DATE && (currentPath.startsWith("year:") || currentPath.contains("month:"))) {
+                        val year = currentPath.substringAfter("year:").substringBefore("/").toIntOrNull() ?: 0
+                        if (year > 0) {
+                            var yearMedia = cachedYearMedia[year]
+                            if (yearMedia == null || yearMedia.isEmpty()) {
+                                // Try getting from Room DB or fast server query
+                                val dbMedia = repo.getAllMedia()
+                                if (dbMedia != null && dbMedia.isNotEmpty()) {
+                                    yearMedia = dbMedia.filter { media ->
+                                        val localMs = DateUtils.getLocalTimeMs(media.metadata?.creationDate, media.metadata?.creationDateOffset)
+                                        getYearFromTimestamp(localMs) == year
+                                    }
+                                }
+                            }
+
+                            if (yearMedia != null && yearMedia.isNotEmpty()) {
+                                cachedYearMedia[year] = yearMedia
+                                val dir = buildDateViewDirectory(currentPath, yearMedia)
+                                _galleryState.value = GalleryUiState.Success(sortDirectory(dir))
+                            } else {
+                                _galleryState.value = GalleryUiState.Loading
+                            }
+
+                            // Fetch from server specifically for this year in background/refresh
+                            val freshYearMedia = fetchMediaForYear(year)
+                            if (freshYearMedia.isNotEmpty()) {
+                                val dir = buildDateViewDirectory(currentPath, freshYearMedia)
+                                _galleryState.value = GalleryUiState.Success(sortDirectory(dir))
+                            }
+                            _isRefreshing.value = false
+                            return@launch
+                        }
+                    }
+
                     val rootPath = if (isFlattened.value && !currentPath.startsWith("year:") && !currentPath.startsWith("month:")) {
                         path
                     } else {
