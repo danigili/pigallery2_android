@@ -947,6 +947,7 @@ fun AlbumsTabContent(viewModel: GalleryViewModel) {
     val isLandscape = LocalConfiguration.current.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
     val itemsPerRow = if (isLandscape) itemsPerRowLandscape else itemsPerRowPortrait
     val spacing by viewModel.spacing.collectAsState()
+    val edgeToEdgeGrid by viewModel.edgeToEdgeGrid.collectAsState()
     val cornerRadius by viewModel.cornerRadius.collectAsState()
     val aspectRatio by viewModel.aspectRatio.collectAsState()
 
@@ -1063,7 +1064,7 @@ fun AlbumsTabContent(viewModel: GalleryViewModel) {
                             
                             LazyVerticalGrid(
                                 columns = GridCells.Fixed(itemsPerRow),
-                                contentPadding = PaddingValues(16.dp),
+                                contentPadding = PaddingValues(horizontal = if (edgeToEdgeGrid) 0.dp else 16.dp, vertical = 16.dp),
                                 verticalArrangement = Arrangement.spacedBy(spacingDp),
                                 horizontalArrangement = Arrangement.spacedBy(spacingDp),
                                 modifier = Modifier.weight(1f).fillMaxWidth()
@@ -1098,6 +1099,7 @@ fun RediscoverTabContent(viewModel: GalleryViewModel) {
     val isLandscape = LocalConfiguration.current.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
     val itemsPerRow = if (isLandscape) itemsPerRowLandscape else itemsPerRowPortrait
     val spacing by viewModel.spacing.collectAsState()
+    val edgeToEdgeGrid by viewModel.edgeToEdgeGrid.collectAsState()
     val cornerRadius by viewModel.cornerRadius.collectAsState()
     val aspectRatio by viewModel.aspectRatio.collectAsState()
 
@@ -1141,7 +1143,7 @@ fun RediscoverTabContent(viewModel: GalleryViewModel) {
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(itemsPerRow.toInt()),
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(16.dp),
+                        contentPadding = PaddingValues(horizontal = if (edgeToEdgeGrid) 0.dp else 16.dp, vertical = 16.dp),
                         verticalArrangement = Arrangement.spacedBy(spacing.dp),
                         horizontalArrangement = Arrangement.spacedBy(spacing.dp)
                     ) {
@@ -1155,7 +1157,7 @@ fun RediscoverTabContent(viewModel: GalleryViewModel) {
                             // Header
                             item(span = { GridItemSpan(itemsPerRow.toInt()) }) {
                                 var isFocused by remember { mutableStateOf(false) }
-                                Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                                Column(modifier = Modifier.padding(horizontal = if (edgeToEdgeGrid) 8.dp else 0.dp, vertical = 8.dp)) {
                                     val hasMore = mediaList.size > itemsPerRow.toInt()
                                     
                                     val focusModifier = if (isFirstYear) Modifier.focusRequester(firstItemFocusRequester) else Modifier
@@ -1236,6 +1238,7 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
     var itemsPerRowLandscape by remember { mutableStateOf(viewModel.prefs.itemsPerRowLandscape.toFloat()) }
     var cornerRadius by remember { mutableStateOf(viewModel.prefs.cornerRadius.toFloat()) }
     var spacing by remember { mutableStateOf(viewModel.prefs.spacing.toFloat()) }
+    var edgeToEdgeGrid by remember { mutableStateOf(viewModel.prefs.edgeToEdgeGrid) }
     var selectedRatioIndex by remember {
         mutableStateOf(
             when (viewModel.prefs.aspectRatio) {
@@ -1575,6 +1578,27 @@ fun SettingsTabContent(viewModel: GalleryViewModel) {
                                     valueRange = 0f..24f,
                                     steps = 24
                                 )
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Edge-to-edge Grid Switch
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(text = "Edge-to-edge Grid", style = MaterialTheme.typography.bodyMedium)
+                                Text(text = "Extend the grid to the side edges of the screen", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Switch(
+                                checked = edgeToEdgeGrid,
+                                onCheckedChange = {
+                                    edgeToEdgeGrid = it
+                                    viewModel.setEdgeToEdgeGrid(it)
+                                }
                             )
                         }
 
@@ -2313,6 +2337,7 @@ fun GalleryContentGrid(
     val selectedMediaForShare by viewModel.selectedMediaForShare.collectAsState()
 
     val spacing by viewModel.spacing.collectAsState()
+    val edgeToEdgeGrid by viewModel.edgeToEdgeGrid.collectAsState()
     val itemsPerRowPortrait by viewModel.itemsPerRowPortrait.collectAsState()
     val itemsPerRowLandscape by viewModel.itemsPerRowLandscape.collectAsState()
     val isLandscape = LocalConfiguration.current.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
@@ -2351,7 +2376,7 @@ fun GalleryContentGrid(
         LazyVerticalGrid(
             state = state,
             columns = GridCells.Fixed(itemsPerRow),
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = PaddingValues(horizontal = if (edgeToEdgeGrid) 0.dp else 16.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(spacingDp),
         horizontalArrangement = Arrangement.spacedBy(spacingDp),
         modifier = Modifier.fillMaxSize()
@@ -2473,7 +2498,7 @@ fun GalleryContentGrid(
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onBackground,
-                    modifier = Modifier.padding(start = 4.dp, top = 24.dp, bottom = 8.dp, end = 4.dp).fillMaxWidth()
+                    modifier = Modifier.padding(start = if (edgeToEdgeGrid) 16.dp else 4.dp, top = 24.dp, bottom = 8.dp, end = if (edgeToEdgeGrid) 16.dp else 4.dp).fillMaxWidth()
                 )
             }
             items(count = mediaItems.size, key = { index -> "media_${mediaItems[index].id ?: "none"}_${mediaItems[index].parentPath ?: ""}_${mediaItems[index].name}_$index" }) { index -> val media = mediaItems[index]
@@ -2899,6 +2924,7 @@ fun PersonsTabContent(viewModel: GalleryViewModel) {
     val isLandscape = LocalConfiguration.current.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
     val itemsPerRow = if (isLandscape) itemsPerRowLandscape else itemsPerRowPortrait
     val spacing by viewModel.spacing.collectAsState()
+    val edgeToEdgeGrid by viewModel.edgeToEdgeGrid.collectAsState()
 
     if (selectedPerson != null) {
         // Render current person's content
@@ -3010,7 +3036,7 @@ fun PersonsTabContent(viewModel: GalleryViewModel) {
                             LazyVerticalGrid(
                                 columns = GridCells.Fixed(itemsPerRow),
                                 modifier = Modifier.weight(1f).fillMaxWidth(),
-                                contentPadding = PaddingValues(16.dp),
+                                contentPadding = PaddingValues(horizontal = if (edgeToEdgeGrid) 0.dp else 16.dp, vertical = 16.dp),
                                 horizontalArrangement = Arrangement.spacedBy(spacingDp),
                                 verticalArrangement = Arrangement.spacedBy(spacingDp)
                             ) {
