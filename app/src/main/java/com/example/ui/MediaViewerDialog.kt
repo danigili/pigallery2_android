@@ -1221,6 +1221,11 @@ fun MetadataContent(media: ApiMedia, onClose: () -> Unit) {
             }
         }
         
+        val location = listOfNotNull(media.metadata?.city, media.metadata?.state, media.metadata?.country).distinct()
+        if (location.isNotEmpty()) {
+            MetadataRow(icon = Icons.Outlined.Place, label = "Location", value = location.joinToString(", "))
+        }
+
         media.metadata?.gps?.let { gps ->
             val gpsStr = String.format(java.util.Locale.US, "%.6f, %.6f", gps.latitude, gps.longitude)
             MetadataRow(icon = Icons.Outlined.LocationOn, label = "GPS Coordinates", value = gpsStr)

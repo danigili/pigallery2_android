@@ -137,7 +137,10 @@ data class ApiMediaMetadata(
     val faces: List<ApiFace>? = null,
     val duration: Double? = null,
     val gps: ApiGPSData? = null,
-    val fileSize: Long? = null
+    val fileSize: Long? = null,
+    val city: String? = null,
+    val state: String? = null,
+    val country: String? = null
 )
 
 data class ApiCameraData(
@@ -285,7 +288,20 @@ class PiGalleryApi(private val context: android.content.Context) {
 
         val fileSize = (metaMap["fileSize"] as? Number ?: metaMap["file_size"] as? Number ?: metaMap["s"] as? Number ?: metaMap["fs"] as? Number)?.toLong()
 
-        return ApiMediaMetadata(size, creationDate, creationDateOffset, cameraData, keywords, faces, duration, gps, fileSize)
+        // City/state/country are sent as indexes into the keywords map when packed
+        fun positionField(fullKey: String, packedKey: String): String? {
+            val raw = positionDataMap?.get(fullKey) ?: positionDataMap?.get(packedKey)
+            return when (raw) {
+                is Number -> cwKeywords?.getOrNull(raw.toInt()) as? String
+                is String -> raw
+                else -> null
+            }?.takeIf { it.isNotBlank() }
+        }
+        val city = positionField("city", "cy")
+        val state = positionField("state", "s")
+        val country = positionField("country", "c")
+
+        return ApiMediaMetadata(size, creationDate, creationDateOffset, cameraData, keywords, faces, duration, gps, fileSize, city, state, country)
     }
 
     private val prefs = PreferencesManager(context)
